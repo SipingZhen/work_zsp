@@ -23,10 +23,11 @@ int main()
     return 0;
   }
   #ifdef RK3588
-      usercontroller.loadrknnmodel(path+"/policy");      
+      ret = usercontroller.loadrknnmodel(path+"/policy");
   #else
-    usercontroller.loadModel(path+"/policy");  
+    ret = usercontroller.loadModel(path+"/policy");
   #endif
+  if (!ret) return 1;
   usercontroller.process();
   #else
   Controllerbase controller_base;

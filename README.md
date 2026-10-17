@@ -2,6 +2,19 @@
 
 本项目包含在基于ARM架构的设备上使用瑞芯微RKNN框架运行神经网络模型的部署脚本和工具，主要用于Noetix机器人控制系统。
 
+## 与当前 N2 训练策略对齐
+
+`noetix_sdk_release/policy/policy.onnx` 是唯一的 ONNX 策略文件。策略输入是 5 帧 × 62 维（310 维），输出是 18 维动作，控制频率为 50 Hz。部署观测依次为速度指令 3、机体角速度 3、roll/pitch 2、相对默认关节角 18、关节速度 18、上一帧动作 18；关节按 `config/ning_user.yaml` 中的 `policy_joint_order` 排列，动作按每个关节的 `action_scale` 执行。首次进入行走模式时，5 帧历史均填入当前观测。
+
+更新策略时，将训练项目 `logs/rsl_rl/n2_walkrun/<run>/exported/policy.onnx` 复制到 `noetix_sdk_release/policy/policy.onnx`，再运行：
+
+```bash
+python onnx2rknn/onnx2rknn.py --validate-only
+python onnx2rknn/onnx2rknn.py
+```
+
+第二条命令需要 RKNN Toolkit 2，生成 `noetix_sdk_release/policy/policy.rknn`。ARM 控制器使用该 RKNN 文件，必须先完成转换再上机。转换脚本会检查新 ONNX 的输入输出形状、关节顺序、默认角度、PD 增益和动作缩放是否与部署配置相符。修改 C++ 后也需要重新编译控制器。首次上机前应先确认 IMU 角速度坐标系和电机编号与当前硬件一致。
+
 ## 项目结构
 
 - `noetix_sdk_release/`: Noetix机器人SDK发布版本（核心部分）
@@ -34,8 +47,8 @@ noetix_sdk_release/
 - 通信管理
 
 #### 2. 策略模型 (`policy/`)
-- `policy_1.onnx`: 原始ONNX格式模型
-- `policy_1.rknn`: 转换后的RKNN格式模型（用于NPU加速）
+- `policy.onnx`: 当前 N2 训练策略
+- `policy.rknn`: 从该 ONNX 转换得到的 RKNN 模型（用于 NPU 加速）
 
 #### 3. 机器人配置 (`robot/`)
 机器人硬件配置文件：
@@ -89,9 +102,9 @@ chmod +x build_release.sh
 - 传感器校准值
 
 #### 更新策略模型
-1. 将新的ONNX模型放入 `onnx2rknn/` 目录
-2. 转换为RKNN格式
-3. 替换 `policy/` 目录下的模型文件
+1. 将新的 ONNX 模型保存为 `noetix_sdk_release/policy/policy.onnx`
+2. 运行 `python onnx2rknn/onnx2rknn.py --validate-only` 检查模型与部署配置
+3. 运行 `python onnx2rknn/onnx2rknn.py` 生成 `policy.rknn`
 
 #### 调试和监控
 ```bash

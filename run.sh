@@ -5,7 +5,7 @@ sudo  ifconfig eth0 up
 ./setrgmii.sh
 sudo -s <<EOF
 echo "##################"
-cd /home/noetix/work_zkt/noetix_sdk_release
+cd /home/noetix/work_zsp/noetix_sdk_release
 ./noetix_joint_controller
 EOF
 wait
