@@ -127,7 +127,7 @@ public:
    
     void computeActions() ;
     void computeActionsrknn();
-    void computeObservation() ;
+    bool computeObservation() ;
    
 
     void onnxdatainit();
@@ -183,6 +183,8 @@ public:
     float scaley;
     std::vector<tensor_element_t> actions_;
     std::vector<tensor_element_t> policyObservations_;
+    std::vector<tensor_element_t> hiddenState_;
+    std::vector<tensor_element_t> cellState_;
     std::vector<tensor_element_t> estObservations_;
     
     Eigen::Matrix<tensor_element_t, Eigen::Dynamic, 1> proprioHistoryBuffer_;

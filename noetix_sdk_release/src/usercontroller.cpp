@@ -2,6 +2,7 @@
 #include "controllerbase.h"
 #include "RotationTools.h"
 #include <algorithm>
+#include <cmath>
 #include "yaml-cpp/yaml.h"
 #include <iostream>
 #include <chrono>
@@ -103,6 +104,13 @@ namespace legged
   {
       isfirstRecObs_ = isfirst;
       isfirstCompAct_ = *isfirstRecObs_;
+      if (*isfirstRecObs_)
+      {
+        std::fill(hiddenState_.begin(), hiddenState_.end(), 0.0f);
+        std::fill(cellState_.begin(), cellState_.end(), 0.0f);
+        lastActions_.setZero();
+        count = 0;
+      }
       command_[0] = cmd.x;
       command_[1] = cmd.y;
       command_[2] = cmd.yaw;
@@ -428,12 +436,25 @@ namespace legged
     if (count % robotconfig.controlCfg.decimation == 0)
     {
       count = 0;    
-      computeObservation();
-      #ifdef RK3588
-      computeActionsrknn();
-      #else
-      computeActions();
-      #endif
+      if (computeObservation())
+      {
+        computeActions();
+        const auto finite = [](tensor_element_t value) { return std::isfinite(value); };
+        if (!std::all_of(actions_.begin(), actions_.end(), finite) ||
+            !std::all_of(hiddenState_.begin(), hiddenState_.end(), finite) ||
+            !std::all_of(cellState_.begin(), cellState_.end(), finite))
+        {
+          std::fill(actions_.begin(), actions_.end(), 0.0f);
+          std::fill(hiddenState_.begin(), hiddenState_.end(), 0.0f);
+          std::fill(cellState_.begin(), cellState_.end(), 0.0f);
+        }
+      }
+      else
+      {
+        std::fill(actions_.begin(), actions_.end(), 0.0f);
+        std::fill(hiddenState_.begin(), hiddenState_.end(), 0.0f);
+        std::fill(cellState_.begin(), cellState_.end(), 0.0f);
+      }
       // limit action range
       scalar_t actionMin = -robotconfig.clipActions;
       scalar_t actionMax = robotconfig.clipActions;
@@ -443,10 +464,16 @@ namespace legged
     }
     // set action
     MotorCmd motorcmd;
-    for (int i = 0; i < actionsSize_; i++)
+    for (int i = 0; i < actuatedDofNum_; i++)
     {
       std::string partName = jointNames[i];
-      scalar_t pos_des = actions_[i] * robotconfig.controlCfg.actionScale + defaultJointAngles_(i);
+      // The trained 10-DOF policy orders left leg then right leg. Hardware
+      // motor indices 0..3 and 9..12 are arms and have no policy action.
+      scalar_t pos_des = defaultJointAngles_(i);
+      if (i >= 4 && i <= 8)
+        pos_des += actions_[i - 4] * robotconfig.controlCfg.actionScale;
+      else if (i >= 13 && i <= 17)
+        pos_des += actions_[i - 8] * robotconfig.controlCfg.actionScale;
       double stiffness = robotconfig.controlCfg.stiffness[partName]; // 根据关节名称获取刚度
       double damping = robotconfig.controlCfg.damping[partName]; // 根据关节名称获取阻尼
       // std::cout << "joint id: " << i << " joint_name:" << partName << " kp:" << stiffness << " kd:" << damping << std::endl;
@@ -457,8 +484,9 @@ namespace legged
       motorcmd.vel =0;
       motorcmd.tau = 0;
       controllerbase.set_joint(motorcmd);
-      lastActions_(i, 0) = actions_[i];       
     }
+    for (int i = 0; i < actionsSize_; ++i)
+      lastActions_(i) = actions_[i];
     count++;
     return true;
   }
@@ -628,9 +656,32 @@ namespace legged
     count = 0;
     onnxdatainit();
     ret = getmodelparam();
+    if (!ret || actionsSize_ != 10 || observationSize_ != 39 || stackSize_ != 1 ||
+        policyInputShapes_.size() != 3 || policyOutputShapes_.size() != 3 ||
+        std::string(policyInputNames_[0]) != "policy_input" ||
+        std::string(policyInputNames_[1]) != "h_in" ||
+        std::string(policyInputNames_[2]) != "c_in" ||
+        std::string(policyOutputNames_[0]) != "policy_output" ||
+        std::string(policyOutputNames_[1]) != "h_out" ||
+        std::string(policyOutputNames_[2]) != "c_out" ||
+        policyInputShapes_[0] != std::vector<int64_t>({1, 39}) ||
+        policyOutputShapes_[0] != std::vector<int64_t>({1, 10}) ||
+        policyInputShapes_[1].size() != 3 || policyInputShapes_[2] != policyInputShapes_[1] ||
+        policyOutputShapes_[1] != policyInputShapes_[1] ||
+        policyOutputShapes_[2] != policyInputShapes_[1] ||
+        policyInputShapes_[1][1] != 1 || policyInputShapes_[1][0] < 1 ||
+        policyInputShapes_[1][2] < 1)
+    {
+      std::cerr << "N2 DWL requires ONNX inputs [1,39], [layers,1,hidden] x2 "
+                   "and outputs [1,10], [layers,1,hidden] x2" << std::endl;
+      return false;
+    }
+    const auto stateSize = policyInputShapes_[1][0] * policyInputShapes_[1][2];
+    hiddenState_.assign(stateSize, 0.0f);
+    cellState_.assign(stateSize, 0.0f);
 
     printf("Load Onnx run model successfully !!!\n");
-    return true;
+    return ret;
   }
   
 
@@ -810,13 +861,16 @@ namespace legged
   }
   void UserController::computeActions()
   {
-    std::cout << "******************onxx****************" << std::endl;
     std::vector<Ort::Value> policyInputValues;
     policyInputValues.push_back(Ort::Value::CreateTensor<tensor_element_t>(memoryInfo, policyObservations_.data(),policyObservations_.size(),
                                                                           policyInputShapes_[0].data(), policyInputShapes_[0].size()));
+    policyInputValues.push_back(Ort::Value::CreateTensor<tensor_element_t>(memoryInfo, hiddenState_.data(), hiddenState_.size(),
+                                                                          policyInputShapes_[1].data(), policyInputShapes_[1].size()));
+    policyInputValues.push_back(Ort::Value::CreateTensor<tensor_element_t>(memoryInfo, cellState_.data(), cellState_.size(),
+                                                                          policyInputShapes_[2].data(), policyInputShapes_[2].size()));
      // run inference
     Ort::RunOptions runOptions;
-    std::vector<Ort::Value> outputValues = policySessionPtr->Run(runOptions, policyInputNames_.data(), policyInputValues.data(), 1, policyOutputNames_.data(), 1);
+    std::vector<Ort::Value> outputValues = policySessionPtr->Run(runOptions, policyInputNames_.data(), policyInputValues.data(), 3, policyOutputNames_.data(), 3);
     if (isfirstCompAct_)
     {
       for (int i = 0; i < policyObservations_.size(); ++i) {
@@ -832,11 +886,13 @@ namespace legged
     {
       actions_[i] = *(outputValues[0].GetTensorMutableData<tensor_element_t>() + i);
     }
+    std::copy_n(outputValues[1].GetTensorMutableData<tensor_element_t>(), hiddenState_.size(), hiddenState_.begin());
+    std::copy_n(outputValues[2].GetTensorMutableData<tensor_element_t>(), cellState_.size(), cellState_.begin());
     
     
   }
 
-  void UserController::computeObservation()
+  bool UserController::computeObservation()
   {
     
     std::atomic<scalar_t> comm_x;
@@ -850,10 +906,7 @@ namespace legged
     if (*isfirstRecObs_)
     {
       
-      for (int i = 0; i < 63; i++)
-      {
-        proprioObs(i,0) = 0.0;
-      }
+      proprioObs.setZero();
 
       for (size_t i = 0; i < stackSize_; i++)
       {
@@ -878,20 +931,30 @@ namespace legged
     matrix_t commandScaler = Eigen::DiagonalMatrix<scalar_t, 3>(obsScales.linVel, obsScales.linVel, obsScales.angVel);
 
 
-    proprioObs << command, // 3
-   	propri_.baseAngVel * obsScales.angVel,  // 3
+    // Training order: command(3), angular velocity(3), gravity(3),
+    // left/right leg position(10), velocity(10), previous action(10).
+    vector_t legPos(actionsSize_), legVel(actionsSize_);
+    for (int i = 0; i < actionsSize_; ++i)
+    {
+      const int motorIndex = i < 5 ? i + 4 : i + 8;
+      legPos(i) = propri_.jointPos(motorIndex) - defaultJointAngles_(motorIndex);
+      legVel(i) = propri_.jointVel(motorIndex);
+    }
+    proprioObs << command,
+        propri_.baseAngVel * obsScales.angVel,
         propri_.projectedGravity(0) * obsScales.quat,  // 1
         propri_.projectedGravity(1) * obsScales.quat,  // 1
         propri_.projectedGravity(2) * obsScales.quat,  // 1
         
-        (propri_.jointPos - defaultJointAngles_) * obsScales.dofPos,  // 18
-        propri_.jointVel * obsScales.dofVel,  // 18
-        actions;  // 18
+        legPos * obsScales.dofPos,
+        legVel * obsScales.dofVel,
+        actions;
 
     
 
-    proprioHistoryBuffer_.head(proprioHistoryBuffer_.size() - observationSize_) =
-        proprioHistoryBuffer_.tail(proprioHistoryBuffer_.size() - observationSize_);
+    if (stackSize_ > 1)
+      proprioHistoryBuffer_.head(proprioHistoryBuffer_.size() - observationSize_) =
+          proprioHistoryBuffer_.tail(proprioHistoryBuffer_.size() - observationSize_);
     proprioHistoryBuffer_.tail(observationSize_) = proprioObs.cast<tensor_element_t>();
   
 
@@ -902,6 +965,9 @@ namespace legged
       // if(i < observationSize_)
       // std::cout << i << "obs:::" << estObservations_[i] << std::endl;
     }
+    const auto finite = [](tensor_element_t value) { return std::isfinite(value); };
+    if (!std::all_of(policyObservations_.begin(), policyObservations_.end(), finite))
+      return false;
     // Limit observation range
     scalar_t obsMin = -robotconfig.clipObs;
     scalar_t obsMax = robotconfig.clipObs;
@@ -909,7 +975,7 @@ namespace legged
                   [obsMin, obsMax](scalar_t x)
                   { return std::max(obsMin, std::min(obsMax, x)); });
 
-   
+    return true;
     
   }
 

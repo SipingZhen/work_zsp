@@ -22,11 +22,12 @@ int main()
     printf("usercontroller.init   failed\n");
     return 0;
   }
-  #ifdef RK3588
-      usercontroller.loadrknnmodel(path+"/policy");      
-  #else
-    usercontroller.loadModel(path+"/policy");  
-  #endif
+  ret = usercontroller.loadModel(path+"/policy");
+  if (!ret)
+  {
+    fprintf(stderr, "Failed to load N2 DWL ONNX policy\n");
+    return 1;
+  }
   usercontroller.process();
   #else
   Controllerbase controller_base;

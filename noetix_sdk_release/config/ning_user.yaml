@@ -5,14 +5,14 @@ user:
 
       leg_l1_joint: 0.0
       leg_l2_joint: 0.0
-      leg_l3_joint: -0.1495
-      leg_l4_joint: 0.3215
-      leg_l5_joint: -0.1720
+      leg_l3_joint: -0.25
+      leg_l4_joint: 0.5
+      leg_l5_joint: -0.25
       leg_r1_joint: 0.0
       leg_r2_joint: 0.0
-      leg_r3_joint: -0.1495
-      leg_r4_joint: 0.3215
-      leg_r5_joint: -0.1720
+      leg_r3_joint: -0.25
+      leg_r4_joint: 0.5
+      leg_r5_joint: -0.25
 
       arm_l1_joint: 0.0
       arm_l2_joint: 0.2
@@ -84,12 +84,12 @@ user:
       height_measurements: 5.0
 
   size:
-    actions_size: 18
-    observations_size: 63
+    actions_size: 10
+    observations_size: 39
     observations_size_bydmimic: 99
-    stack_size: 5
+    stack_size: 1
 
   axis_mappings:
     scalez: 0.8
-    scalex: 1.0
+    scalex: 0.8
     scaley: 0.3   
