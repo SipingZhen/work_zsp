@@ -455,7 +455,7 @@ def simulate(args):
               f"stand {button_map[2]}+{button_map[10]}, "
               f"policy {button_map[2]}+{button_map[5]}, "
               f"walk policy {button_map[2]}+{button_map[6]}, "
-              f"run policy {button_map[2]}+{button_map[7]}", flush=True)
+              f"run policy {button_map[2]}+{button_map[8]}", flush=True)
         print(f"joystick axes: x={args.joystick_forward_sign}*axis{args.joystick_forward_axis}, "
               f"yaw={args.joystick_yaw_sign}*axis{args.joystick_yaw_axis}", flush=True)
     profiles = yaml.safe_load(args.config.read_text())
@@ -495,8 +495,8 @@ def joystick_button_map(bindings):
         if not separator or not logical.isdecimal() or not physical.isdecimal():
             raise ValueError(f"Invalid --joystick-button-map {binding!r}; expected LOGICAL=PHYSICAL")
         logical, physical = int(logical), int(physical)
-        if logical not in (2, 5, 6, 7, 9, 10, 11) or physical >= 32:
-            raise ValueError(f"Invalid --joystick-button-map {binding!r}; logical must be 2, 5, 6, 7, 9, 10 or 11 and physical must be 0..31")
+        if logical not in (2, 5, 6, 8, 9, 10, 11) or physical >= 32:
+            raise ValueError(f"Invalid --joystick-button-map {binding!r}; logical must be 2, 5, 6, 8, 9, 10 or 11 and physical must be 0..31")
         mapping[logical] = physical
     return mapping
 

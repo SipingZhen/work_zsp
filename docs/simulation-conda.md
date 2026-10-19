@@ -64,7 +64,7 @@ ls -l /dev/input/js0
 python noetix_sdk_release/src/sim2sim.py --joystick
 ```
 
-默认进入手柄模式；如果设备还未连接，程序会提示一次并等待。设备路径来自 `config/hwconfig.yaml` 的 `remote_port`，可用 `--joystick-device /dev/input/js1` 覆盖；用 `--no-joystick` 可直接运行策略。实体控制器和仿真都调用 `usercontroller.cpp` 中的 `updateRemoteMode()` 处理按键，并调用 `readRemoteCommand()` 把轴 1、轴 0 分别映射为前进和转向指令（横向指令为 0）。仿真默认使用你提供的手柄编号：物理按键 `7` 使能，按住 `4` 再按 `6` 站立，按住 `4` 再按 `2` 选择原策略，按住 `4` 再按 `3` 选择 walk，按住 `4` 再按 `0` 选择 run。它们分别映射到逻辑按键 `9`、`2+10`、`2+5`、`2+6`、`2+7`；逻辑按键 `11` 可从 USERWALK 返回 STAND。实机的 run 组合键 `2+7` 是暂定值。仿真在 DEFAULT 模式持续运行物理仿真，关节为零力矩，机器人会自然倒下。遥控模式会使用摇杆指令，忽略 `--vx`、`--vy` 和 `--yaw`；默认持续运行，关闭窗口或按 `Ctrl+C` 结束，也可用 `--duration 10` 指定仿真时长。
+默认进入手柄模式；如果设备还未连接，程序会提示一次并等待。设备路径来自 `config/hwconfig.yaml` 的 `remote_port`，可用 `--joystick-device /dev/input/js1` 覆盖；用 `--no-joystick` 可直接运行策略。实体控制器和仿真都调用 `usercontroller.cpp` 中的 `updateRemoteMode()` 处理按键，并调用 `readRemoteCommand()` 把轴 1、轴 0 分别映射为前进和转向指令（横向指令为 0）。仿真默认使用你提供的手柄编号：物理按键 `7` 使能，按住 `4` 再按 `6` 站立，按住 `4` 再按 `2` 选择原策略，按住 `4` 再按 `3` 选择 walk，按住 `4` 再按 `0` 选择 run。它们分别映射到逻辑按键 `9`、`2+10`、`2+5`、`2+6`、`2+8`；逻辑按键 `11` 可从 USERWALK 返回 STAND。实机的 run 组合键为 `2+8`。仿真在 DEFAULT 模式持续运行物理仿真，关节为零力矩，机器人会自然倒下。遥控模式会使用摇杆指令，忽略 `--vx`、`--vy` 和 `--yaw`；默认持续运行，关闭窗口或按 `Ctrl+C` 结束，也可用 `--duration 10` 指定仿真时长。
 
 如果手柄按键或轴编号不同，先运行 `python noetix_sdk_release/src/sim2sim.py --joystick --joystick-debug`，按动手柄查看终端打印的物理编号，再用 `--joystick-button-map 9=9` 这类参数覆盖默认映射；可重复指定。默认前进使用左摇杆竖直轴 1 的反方向，转向使用右摇杆水平轴 3 的反方向；用 `--joystick-forward-axis`、`--joystick-yaw-axis` 和相应的 `--joystick-forward-sign`、`--joystick-yaw-sign` 调整。窗口获得焦点时按住 `Ctrl+Shift+R`，仿真会把机器人扶正、提起并固定在空中；保持按键时可以依次用遥控器使能、站立、进入策略，松开任意一个键后机器人下落。此快捷键只在 MuJoCo 中有效。实体控制器仍通过 SDK 的 `get_jsdata()` 获取手柄数据。
 
@@ -91,7 +91,7 @@ python noetix_sdk_release/src/sim2sim.py --joystick
 | `--joystick`、`--no-joystick` | 启用或关闭 Linux 遥控器模式 | 默认启用；设备未连接时等待 |
 | `--joystick-device` | 指定摇杆设备 | `hwconfig.yaml` 中的 `remote_port` |
 | `--joystick-debug` | 打印物理轴、按键和映射后的 `x/yaw` 指令 | 关闭 |
-| `--joystick-button-map LOGICAL=PHYSICAL` | 覆盖按键 2、5、6、9、10、11 的物理编号 | `2→4`、`5→2`、`6→3`、`9→7`、`10→6`、`11→11` |
+| `--joystick-button-map LOGICAL=PHYSICAL` | 覆盖按键 2、5、6、8、9、10、11 的物理编号 | `2→4`、`5→2`、`6→3`、`8→0`、`9→7`、`10→6`、`11→11` |
 | `--joystick-forward-axis`、`--joystick-yaw-axis` | 前进、转向使用的物理轴编号 | `1`、`3` |
 | `--joystick-forward-sign`、`--joystick-yaw-sign` | 对轴值乘以 `-1` 或 `1` | `-1`、`-1` |
 | `--vx` | 前进输入；默认、walk、run 的速度指令下限均为 -0.6，walk 上限 1，run 上限 2 | `0` |

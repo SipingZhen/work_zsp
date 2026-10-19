@@ -8,7 +8,7 @@ import struct
 EVENT = struct.Struct("<IhBB")  # Linux joystick API: time, value, type, number
 AXIS = 0x02
 BUTTON = 0x01
-DEFAULT_BUTTON_MAP = {9: 7, 2: 4, 10: 6, 5: 2, 6: 3, 7: 0}
+DEFAULT_BUTTON_MAP = {9: 7, 2: 4, 10: 6, 5: 2, 6: 3, 8: 0}
 
 
 class LinuxJoystick:

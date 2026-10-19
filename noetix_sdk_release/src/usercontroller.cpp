@@ -1190,9 +1190,9 @@ namespace legged {
       }
     }else if(remote_data.button[6] == 0)
       keyflag[6] = 0;
-    if((remote_data.button[7] == 1)&&(remote_data.button[2] == 1)&&(keyflag[7] == 0))
+    if((remote_data.button[8] == 1)&&(remote_data.button[2] == 1)&&(keyflag[8] == 0))
     {
-      keyflag[7] = 1;
+      keyflag[8] = 1;
       if(runPolicyReady_ && (mode_ == WorkMode::STAND || mode_ == WorkMode::USERWALK))
       {
         standPercent = 0;
@@ -1208,8 +1208,8 @@ namespace legged {
         mode_ = WorkMode::USERWALK;
         printf("TO RUN POLICY\n");
       }
-    }else if(remote_data.button[7] == 0)
-      keyflag[7] = 0;
+    }else if(remote_data.button[8] == 0)
+      keyflag[8] = 0;
     if((remote_data.button[11] == 1)&&(keyflag[11] == 0))
     {
       keyflag[11] =1;
