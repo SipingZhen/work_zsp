@@ -1,0 +1,3 @@
+[2026-08-06 21:21:02.876] [error] [thread:1818] [rlcontroller.cpp init:856] leg_r3_joint disconnect
+[2026-08-06 21:21:02.876] [error] [thread:1818] [rlcontroller.cpp init:856] leg_r4_joint disconnect
+[2026-08-06 21:21:02.876] [error] [thread:1818] [rlcontroller.cpp init:856] leg_r5_joint disconnect
