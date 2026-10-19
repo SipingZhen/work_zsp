@@ -1001,6 +1001,10 @@ namespace legged {
         standPercent = 0;
         isChangeMode_ = true;
         lastActions_.setZero();
+#ifndef NOETIX_SIM_OBS
+        std::fill(actions_.begin(), actions_.end(), 0.0f);
+        count = 0;
+#endif
         activePolicy_ = PolicyKind::DEFAULT;
         walkHistoryFirst_ = true;
         mode_ = WorkMode::USERWALK;
@@ -1018,6 +1022,10 @@ namespace legged {
         standPercent = 0;
         isChangeMode_ = true;
         lastActions_.setZero();
+#ifndef NOETIX_SIM_OBS
+        std::fill(actions_.begin(), actions_.end(), 0.0f);
+        count = 0;
+#endif
         activePolicy_ = PolicyKind::WALK;
         walkHistoryFirst_ = true;
         mode_ = WorkMode::USERWALK;
