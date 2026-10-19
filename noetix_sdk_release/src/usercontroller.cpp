@@ -367,8 +367,8 @@ namespace legged
     if(updateStateEstimation() == false)
        return false;
     // compute observation & actions
-    const int decimation = activePolicy_ == PolicyKind::WALK
-        ? walkConfig_.decimation : robotconfig.controlCfg.decimation;
+    const int decimation = activePolicy_ == PolicyKind::WALK ? walkConfig_.decimation
+        : activePolicy_ == PolicyKind::RUN ? runConfig_.decimation : robotconfig.controlCfg.decimation;
     if (count % decimation == 0)
     {
       count = 0;    
@@ -376,6 +376,11 @@ namespace legged
       {
         computeWalkObservation();
         computeWalkActions();
+      }
+      else if (activePolicy_ == PolicyKind::RUN)
+      {
+        computeRunObservation();
+        computeRunActions();
       }
       else
       {
@@ -387,8 +392,8 @@ namespace legged
         #endif
       }
       // limit action range
-      const scalar_t clip = activePolicy_ == PolicyKind::WALK
-          ? walkConfig_.clipActions : robotconfig.clipActions;
+      const scalar_t clip = activePolicy_ == PolicyKind::WALK ? walkConfig_.clipActions
+          : activePolicy_ == PolicyKind::RUN ? runConfig_.clipActions : robotconfig.clipActions;
       scalar_t actionMin = -clip;
       scalar_t actionMax = clip;
       std::transform(actions_.begin(), actions_.end(), actions_.begin(),
@@ -401,11 +406,12 @@ namespace legged
     {
       std::string partName = jointNames[i];
       const bool walk = activePolicy_ == PolicyKind::WALK;
-      scalar_t pos_des = walk
-          ? actions_[motorToPolicy_[i]] * walkConfig_.actionScale + walkConfig_.defaults[i]
+      const bool run = activePolicy_ == PolicyKind::RUN;
+      scalar_t pos_des = walk ? actions_[motorToPolicy_[i]] * walkConfig_.actionScale + walkConfig_.defaults[i]
+          : run ? actions_[motorToPolicy_[i]] * runConfig_.actionScale + runConfig_.defaults[i]
           : actions_[motorToPolicy_[i]] * robotconfig.controlCfg.actionScale.at(partName) + defaultJointAngles_(i);
-      double stiffness = walk ? walkConfig_.stiffness[i] : robotconfig.controlCfg.stiffness[partName];
-      double damping = walk ? walkConfig_.damping[i] : robotconfig.controlCfg.damping[partName];
+      double stiffness = walk ? walkConfig_.stiffness[i] : run ? runConfig_.stiffness[i] : robotconfig.controlCfg.stiffness[partName];
+      double damping = walk ? walkConfig_.damping[i] : run ? runConfig_.damping[i] : robotconfig.controlCfg.damping[partName];
       // std::cout << "joint id: " << i << " joint_name:" << partName << " kp:" << stiffness << " kd:" << damping << std::endl;
       motorcmd.pos= pos_des;
       motorcmd.kp= stiffness;
@@ -673,6 +679,65 @@ namespace legged
     }
   }
 
+  bool UserController::loadRunModel(const std::string& modelpath)
+  {
+    try
+    {
+      if (!onnxEnvPrt_)
+        onnxEnvPrt_ = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "LeggedOnnxController");
+      Ort::SessionOptions options;
+      options.SetInterOpNumThreads(1);
+      const std::string path = modelpath + "/policy_run.onnx";
+      auto session = std::make_unique<Ort::Session>(*onnxEnvPrt_, path.c_str(), options);
+      if (session->GetInputCount() != 1 || session->GetOutputCount() != 1 ||
+          session->GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape() != std::vector<int64_t>{1, 315} ||
+          session->GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape() != std::vector<int64_t>{1, 18})
+      {
+        printf("Run policy must have shape [1,315] -> [1,18]\n");
+        return false;
+      }
+      Ort::AllocatorWithDefaultOptions allocator;
+      const YAML::Node run = YAML::LoadFile(modelpath + "/../config/ning_ac.yaml")["run"];
+      if (run["size"]["actions_size"].as<int>() != 18 ||
+          run["size"]["observations_size"].as<int>() != 63 ||
+          run["size"]["stack_size"].as<int>() != 5)
+        throw std::runtime_error("Run config must specify 5 x 63 observations and 18 actions");
+      for (int i = 0; i < 18; ++i)
+      {
+        const std::string& name = jointNames[i];
+        runConfig_.defaults[i] = run["init_state"]["default_joint_angle"][name].as<scalar_t>();
+        runConfig_.stiffness[i] = run["control"]["stiffness"][name].as<scalar_t>();
+        runConfig_.damping[i] = run["control"]["damping"][name].as<scalar_t>();
+      }
+      runConfig_.actionScale = run["control"]["action_scale"].as<scalar_t>();
+      runConfig_.decimation = run["control"]["decimation"].as<int>();
+      runConfig_.clipObs = run["normalization"]["clip_scales"]["clip_observations"].as<scalar_t>();
+      runConfig_.clipActions = run["normalization"]["clip_scales"]["clip_actions"].as<scalar_t>();
+      auto scales = run["normalization"]["obs_scales"];
+      runConfig_.linVel = scales["lin_vel"].as<scalar_t>();
+      runConfig_.angVel = scales["ang_vel"].as<scalar_t>();
+      runConfig_.dofPos = scales["dof_pos"].as<scalar_t>();
+      runConfig_.dofVel = scales["dof_vel"].as<scalar_t>();
+      runConfig_.quat = scales["quat"].as<scalar_t>();
+      runConfig_.scalex = run["axis_mappings"]["scalex"].as<scalar_t>();
+      runConfig_.scaley = run["axis_mappings"]["scaley"].as<scalar_t>();
+      if (runConfig_.decimation <= 0) throw std::runtime_error("Run decimation must be positive");
+      runInputName_ = session->GetInputNameAllocated(0, allocator).get();
+      runOutputName_ = session->GetOutputNameAllocated(0, allocator).get();
+      runObservations_.resize(315);
+      runSessionPtr_ = std::move(session);
+      runHistoryFirst_ = true;
+      runPolicyReady_ = true;
+      printf("Loaded run ONNX policy: %s\n", path.c_str());
+      return true;
+    }
+    catch (const std::exception& error)
+    {
+      printf("Failed to load run policy: %s\n", error.what());
+      return false;
+    }
+  }
+
   void UserController::computeWalkActions()
   {
     const std::array<int64_t, 2> shape{1, 195};
@@ -689,6 +754,21 @@ namespace legged
       const int motor = i < 5 ? i + 4 : i + 8;
       actions_[motorToPolicy_[motor]] = walkActions[i];
     }
+  }
+
+  void UserController::computeRunActions()
+  {
+    const std::array<int64_t, 2> shape{1, 315};
+    auto input = Ort::Value::CreateTensor<tensor_element_t>(
+        memoryInfo, runObservations_.data(), runObservations_.size(), shape.data(), shape.size());
+    const char* inputName = runInputName_.c_str();
+    const char* outputName = runOutputName_.c_str();
+    Ort::RunOptions options;
+    auto outputs = runSessionPtr_->Run(options, &inputName, &input, 1, &outputName, 1);
+    const auto* runActions = outputs[0].GetTensorData<tensor_element_t>();
+    // RunController uses SDK motor order; actions_ uses default policy order.
+    for (int i = 0; i < 18; ++i)
+      actions_[motorToPolicy_[i]] = runActions[i];
   }
   
 
@@ -923,7 +1003,7 @@ namespace legged {
     constexpr int historyFrames = 5;
 
     vector_t command(3);
-    command(0) = command_[0] * walkConfig_.scalex * walkConfig_.linVel;
+    command(0) = std::max(-0.6, std::max(-1.0, std::min(1.0, command_[0])) * walkConfig_.scalex) * walkConfig_.linVel;
     command(1) = command_[1] * walkConfig_.scaley * walkConfig_.linVel;
     command(2) = command_[2] * walkConfig_.angVel;
 
@@ -964,6 +1044,55 @@ namespace legged {
       for (int i = frameSize; i < frameSize * historyFrames; ++i)
         walkObservations_[i - frameSize] = walkObservations_[i];
       std::copy_n(frame, frameSize, walkObservations_.end() - frameSize);
+    }
+  }
+
+  void UserController::computeRunObservation()
+  {
+    constexpr int frameSize = 63;
+    constexpr int historyFrames = 5;
+
+    vector_t command(3);
+    command(0) = std::max(-0.6, std::max(-1.0, std::min(1.0, command_[0])) * runConfig_.scalex) * runConfig_.linVel;
+    command(1) = command_[1] * runConfig_.scaley * runConfig_.linVel;
+    command(2) = command_[2] * runConfig_.angVel;
+
+    vector_t jointPosObs(18);
+    vector_t jointVelObs(18);
+    vector_t actions(18);
+    // Match the SDK RunController's motor order for all three joint blocks.
+    for (int i = 0; i < 18; ++i)
+    {
+      jointPosObs(i) = (propri_.jointPos(i) - runConfig_.defaults[i]) * runConfig_.dofPos;
+      jointVelObs(i) = propri_.jointVel(i) * runConfig_.dofVel;
+      actions(i) = lastActions_(motorToPolicy_[i]);
+    }
+
+    vector_t proprioObs(frameSize);
+    proprioObs << command,
+                    propri_.baseAngVel * runConfig_.angVel,
+                    propri_.projectedGravity * runConfig_.quat,
+                    jointPosObs,
+                    jointVelObs,
+                    actions;
+
+    tensor_element_t frame[frameSize];
+    for (int i = 0; i < frameSize; ++i)
+    {
+      const scalar_t value = static_cast<tensor_element_t>(proprioObs(i));
+      frame[i] = std::max(-runConfig_.clipObs, std::min(runConfig_.clipObs, value));
+    }
+    if (runHistoryFirst_)
+    {
+      for (int i = 0; i < historyFrames; ++i)
+        std::copy_n(frame, frameSize, runObservations_.begin() + i * frameSize);
+      runHistoryFirst_ = false;
+    }
+    else
+    {
+      for (int i = frameSize; i < frameSize * historyFrames; ++i)
+        runObservations_[i - frameSize] = runObservations_[i];
+      std::copy_n(frame, frameSize, runObservations_.end() - frameSize);
     }
   }
 
@@ -1033,6 +1162,7 @@ namespace legged {
 #endif
         activePolicy_ = PolicyKind::DEFAULT;
         walkHistoryFirst_ = true;
+        runHistoryFirst_ = true;
         mode_ = WorkMode::USERWALK;
         keyflag[5] =1;
         printf("TO DEFAULT POLICY\n");
@@ -1054,11 +1184,32 @@ namespace legged {
 #endif
         activePolicy_ = PolicyKind::WALK;
         walkHistoryFirst_ = true;
+        runHistoryFirst_ = true;
         mode_ = WorkMode::USERWALK;
         printf("TO WALK POLICY\n");
       }
     }else if(remote_data.button[6] == 0)
       keyflag[6] = 0;
+    if((remote_data.button[7] == 1)&&(remote_data.button[2] == 1)&&(keyflag[7] == 0))
+    {
+      keyflag[7] = 1;
+      if(runPolicyReady_ && (mode_ == WorkMode::STAND || mode_ == WorkMode::USERWALK))
+      {
+        standPercent = 0;
+        isChangeMode_ = true;
+        lastActions_.setZero();
+#ifndef NOETIX_SIM_OBS
+        std::fill(actions_.begin(), actions_.end(), 0.0f);
+        count = 0;
+#endif
+        activePolicy_ = PolicyKind::RUN;
+        walkHistoryFirst_ = true;
+        runHistoryFirst_ = true;
+        mode_ = WorkMode::USERWALK;
+        printf("TO RUN POLICY\n");
+      }
+    }else if(remote_data.button[7] == 0)
+      keyflag[7] = 0;
     if((remote_data.button[11] == 1)&&(keyflag[11] == 0))
     {
       keyflag[11] =1;
@@ -1103,7 +1254,7 @@ namespace legged {
     // Apply a dead zone to the target, then limit each policy-frame change.
     static scalar_t limitedX = 0.0;
     if (firstObservation) limitedX = 0.0;
-    scalar_t targetX = comm_x * obsScales.linVel;
+    scalar_t targetX = std::max(-0.6, static_cast<scalar_t>(comm_x)) * obsScales.linVel;
     if (std::abs(targetX) < 0.3) targetX = 0.0;
     const scalar_t deltaX = std::max(-0.05, std::min(0.05, targetX - limitedX));
     limitedX += deltaX;

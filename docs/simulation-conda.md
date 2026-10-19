@@ -64,7 +64,7 @@ ls -l /dev/input/js0
 python noetix_sdk_release/src/sim2sim.py --joystick
 ```
 
-默认进入手柄模式；如果设备还未连接，程序会提示一次并等待。设备路径来自 `config/hwconfig.yaml` 的 `remote_port`，可用 `--joystick-device /dev/input/js1` 覆盖；用 `--no-joystick` 可直接运行策略。实体控制器和仿真都调用 `usercontroller.cpp` 中的 `updateRemoteMode()` 处理按键，并调用 `readRemoteCommand()` 把轴 1、轴 0 分别映射为前进和转向指令（横向指令为 0）。仿真默认使用你提供的手柄编号：物理按键 `7` 使能，按住 `4` 再按 `6` 站立，按住 `4` 再按 `2` 选择原策略，按住 `4` 再按 `3` 选择 walk 策略。它们分别映射到控制器的逻辑按键 `9`、`2+10`、`2+5`、`2+6`；逻辑按键 `11` 可从 USERWALK 返回 STAND。仿真在 DEFAULT 模式持续运行物理仿真，关节为零力矩，机器人会自然倒下。遥控模式会使用摇杆指令，忽略 `--vx`、`--vy` 和 `--yaw`；默认持续运行，关闭窗口或按 `Ctrl+C` 结束，也可用 `--duration 10` 指定仿真时长。
+默认进入手柄模式；如果设备还未连接，程序会提示一次并等待。设备路径来自 `config/hwconfig.yaml` 的 `remote_port`，可用 `--joystick-device /dev/input/js1` 覆盖；用 `--no-joystick` 可直接运行策略。实体控制器和仿真都调用 `usercontroller.cpp` 中的 `updateRemoteMode()` 处理按键，并调用 `readRemoteCommand()` 把轴 1、轴 0 分别映射为前进和转向指令（横向指令为 0）。仿真默认使用你提供的手柄编号：物理按键 `7` 使能，按住 `4` 再按 `6` 站立，按住 `4` 再按 `2` 选择原策略，按住 `4` 再按 `3` 选择 walk，按住 `4` 再按 `0` 选择 run。它们分别映射到逻辑按键 `9`、`2+10`、`2+5`、`2+6`、`2+7`；逻辑按键 `11` 可从 USERWALK 返回 STAND。实机的 run 组合键 `2+7` 是暂定值。仿真在 DEFAULT 模式持续运行物理仿真，关节为零力矩，机器人会自然倒下。遥控模式会使用摇杆指令，忽略 `--vx`、`--vy` 和 `--yaw`；默认持续运行，关闭窗口或按 `Ctrl+C` 结束，也可用 `--duration 10` 指定仿真时长。
 
 如果手柄按键或轴编号不同，先运行 `python noetix_sdk_release/src/sim2sim.py --joystick --joystick-debug`，按动手柄查看终端打印的物理编号，再用 `--joystick-button-map 9=9` 这类参数覆盖默认映射；可重复指定。默认前进使用左摇杆竖直轴 1 的反方向，转向使用右摇杆水平轴 3 的反方向；用 `--joystick-forward-axis`、`--joystick-yaw-axis` 和相应的 `--joystick-forward-sign`、`--joystick-yaw-sign` 调整。窗口获得焦点时按住 `Ctrl+Shift+R`，仿真会把机器人扶正、提起并固定在空中；保持按键时可以依次用遥控器使能、站立、进入策略，松开任意一个键后机器人下落。此快捷键只在 MuJoCo 中有效。实体控制器仍通过 SDK 的 `get_jsdata()` 获取手柄数据。
 
@@ -75,9 +75,10 @@ python noetix_sdk_release/src/sim2sim.py --joystick
 | MuJoCo 模型 | `noetix_sdk_release/robot/mjcf/N2.xml` |
 | ONNX 策略 | `noetix_sdk_release/policy/policy.onnx` |
 | Walk ONNX 策略 | `noetix_sdk_release/policy/policy_walk.onnx` |
-| 控制配置 | 默认策略用 `ning_user.yaml` 的 `user`；walk 策略用 `ning_ac.yaml` 的 `walk` |
+| Run ONNX 策略 | `noetix_sdk_release/policy/policy_run.onnx` |
+| 控制配置 | 默认策略用 `ning_user.yaml` 的 `user`；walk 和 run 用 `ning_ac.yaml` 的对应配置 |
 
-仿真步长是 0.002 秒；两种策略每 10 个物理步更新一次，即 50 Hz。默认策略使用 5×62 维观测和 18 个关节动作；walk 策略使用 5×39 维观测、机体系投影重力和 10 个腿关节动作，并读取 `ning_ac.yaml` 的 `walk` 控制参数。
+仿真步长是 0.002 秒；三种策略每 10 个物理步更新一次，即 50 Hz。默认策略使用 5×62 维观测和 18 个关节动作；walk 使用 5×39 维观测和 10 个腿关节动作；run 使用 5×63 维观测和 18 个关节动作。walk 与 run 的观测均调用部署端 C++ 函数。
 
 ## 4. 常用参数
 
@@ -93,7 +94,7 @@ python noetix_sdk_release/src/sim2sim.py --joystick
 | `--joystick-button-map LOGICAL=PHYSICAL` | 覆盖按键 2、5、6、9、10、11 的物理编号 | `2→4`、`5→2`、`6→3`、`9→7`、`10→6`、`11→11` |
 | `--joystick-forward-axis`、`--joystick-yaw-axis` | 前进、转向使用的物理轴编号 | `1`、`3` |
 | `--joystick-forward-sign`、`--joystick-yaw-sign` | 对轴值乘以 `-1` 或 `1` | `-1`、`-1` |
-| `--vx` | 前进速度指令，单位 m/s | `0` |
+| `--vx` | 前进输入；默认、walk、run 的速度指令下限均为 -0.6，walk 上限 1，run 上限 2 | `0` |
 | `--vy` | 横向速度指令，单位 m/s | `0` |
 | `--yaw` | 转向角速度指令，单位 rad/s | `0` |
 | `--base-height` | 初始机身高度，单位 m | `0.7` |
@@ -108,10 +109,11 @@ python noetix_sdk_release/src/sim2sim.py --no-joystick --headless --duration 5 -
 ```
 
 当前配置中 `axis_mappings.scaley` 是 `0.0`，因此默认配置下修改 `--vy` 不会改变送入策略的横向速度指令。前进指令还会经过观测函数的死区和逐帧限幅，第一帧不会立即达到 `--vx` 的值。
+默认、walk、run 的前进指令下限均为 -0.6；walk 的上限为 1，run 的上限为 2。walk 和 run 的 x 输入均限制在手柄轴范围 `[-1, 1]`，因此 `--vx` 超过 1 也不会继续增大前进指令。
 
 ## 5. 更换策略或配置
 
-可用 `--policy /path/to/new.onnx` 指定其他 ONNX 文件；需要不同参数时，再用 `--config /path/to/config.yaml --profile user` 指定配置。观测输入形状须与配置中的 `observations_size × stack_size` 对应，动作输出维度须与 `actions_size` 一致。关节顺序也须与策略元数据及 N2 模型一致。修改 `UserController::computeObservation()` 或 `UserController::computeWalkObservation()` 后，下次启动会重新编译相应函数。
+可用 `--policy`、`--walk-policy`、`--run-policy` 指定各自的 ONNX 文件；需要不同参数时，再用 `--config /path/to/config.yaml --profile user` 指定默认策略配置。观测输入形状须与配置中的 `observations_size × stack_size` 对应，动作输出维度须与 `actions_size` 一致。关节顺序也须与策略元数据及 N2 模型一致。修改默认、walk 或 run 的 C++ 观测函数后，下次启动会重新编译相应函数。
 
 多输入模型可以重复使用 `--aux-input 输入名=文件.npy` 提供额外输入，也可以在配置段的 `sim_inputs` 中将输入名映射到文件路径（路径相对于配置文件所在目录）。文件可以是单个张量，也可以是在最前面增加策略步维度的 `.npy` 帧序列；脚本还接受 `.npz` 文件。若观测输入或动作输出不是模型的第一个输入/输出，分别设置 `sim_observation_input` 和 `sim_action_output`。额外数据仍须由使用者按策略的实际输入定义准备；本仓库没有为视觉等输入提供通用数据源。
 

@@ -29,6 +29,7 @@ int main()
   #endif
   if (!ret) return 1;
   if (!usercontroller.loadWalkModel(path+"/policy")) return 1;
+  if (!usercontroller.loadRunModel(path+"/policy")) return 1;
   usercontroller.process();
   #else
   Controllerbase controller_base;

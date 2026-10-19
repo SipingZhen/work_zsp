@@ -79,7 +79,7 @@ run:
     stack_size: 5
   axis_mappings:
     scalez: 1.0
-    scalex: 1.3
+    scalex: 2.0
     scaley: 0.0 
 
 walk:

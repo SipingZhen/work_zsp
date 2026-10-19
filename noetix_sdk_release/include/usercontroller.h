@@ -23,7 +23,7 @@ enum class WorkMode : uint8_t
   DEFAULT
 };
 
-enum class PolicyKind : uint8_t { DEFAULT, WALK };
+enum class PolicyKind : uint8_t { DEFAULT, WALK, RUN };
 
   struct RobotCfg
   {
@@ -110,6 +110,7 @@ public:
     bool init(ControlMode mode );
     bool loadModel(std::string modelpath);// override ;
     bool loadWalkModel(const std::string& modelpath);
+    bool loadRunModel(const std::string& modelpath);
     bool loadrknnmodel(std::string modle_path);
     bool handleWalkMode() ;
     void setparameter(Command &cmd,bool* isfirst);
@@ -132,6 +133,8 @@ public:
     void computeActions() ;
     void computeWalkActions();
     void computeWalkObservation();
+    void computeRunActions();
+    void computeRunObservation();
     void computeActionsrknn();
     void computeObservation() ;
    
@@ -168,7 +171,12 @@ public:
     std::string walkOutputName_;
     std::vector<tensor_element_t> walkObservations_;
     bool walkHistoryFirst_ = true;
-    struct WalkConfig
+    std::unique_ptr<Ort::Session> runSessionPtr_;
+    std::string runInputName_;
+    std::string runOutputName_;
+    std::vector<tensor_element_t> runObservations_;
+    bool runHistoryFirst_ = true;
+    struct AuxPolicyConfig
     {
       std::array<scalar_t, 18> defaults{};
       std::array<scalar_t, 18> stiffness{};
@@ -184,7 +192,7 @@ public:
       scalar_t clipObs = 0;
       scalar_t clipActions = 0;
       int decimation = 0;
-    } walkConfig_;
+    } walkConfig_, runConfig_;
     std::unique_ptr<Ort::Session> estSessionPtr;
     std::vector<const char *> policyInputNames_;
     std::vector<const char *> policyOutputNames_;
@@ -238,6 +246,7 @@ public:
     WorkMode  mode_;        
     PolicyKind activePolicy_ = PolicyKind::DEFAULT;
     bool walkPolicyReady_ = false;
+    bool runPolicyReady_ = false;
     bool isChangeMode_=false;                                 
     bool startcontrol = false; 
     int initfinish = 0;

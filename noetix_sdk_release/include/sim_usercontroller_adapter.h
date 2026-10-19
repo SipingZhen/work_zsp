@@ -1,6 +1,6 @@
 #pragma once
 
-// Small stand-ins for the Eigen vectors used by both observation functions.
+// Small stand-ins for the Eigen vectors used by the observation functions.
 // Only the sim build includes this file; the robot build keeps its normal types.
 #include <algorithm>
 #include <array>
@@ -14,7 +14,7 @@
 
 namespace legged {
 enum class WorkMode : uint8_t { STAND, LIE, USERWALK, DEFAULT };
-enum class PolicyKind : uint8_t { DEFAULT, WALK };
+enum class PolicyKind : uint8_t { DEFAULT, WALK, RUN };
 using scalar_t = double;
 using tensor_element_t = float;
 
@@ -124,11 +124,13 @@ class UserController {
         lastActions_(actions_size), defaultJointAngles_(actions_size), command_(3),
         proprioHistoryBuffer_(observation_size * stack_size),
         policyObservations_(observation_size * stack_size),
-        policyToMotor_(actions_size), motorToPolicy_(actions_size), walkObservations_(195) {
+        policyToMotor_(actions_size), motorToPolicy_(actions_size),
+        walkObservations_(195), runObservations_(315) {
     for (int i = 0; i < actions_size; ++i) policyToMotor_[i] = i;
   }
   void computeObservation();
   void computeWalkObservation();
+  void computeRunObservation();
   void readRemoteCommand(double* command) const;
   void updateRemoteMode();
   int remoteStep(const double* axes, const int* buttons, double* command) {
@@ -161,6 +163,20 @@ class UserController {
     walkConfig_.quat = scales[6];
     walkConfig_.clipObs = scales[7];
   }
+  void configureRun(const int* motor_to_policy, const double* defaults, const double* scales) {
+    for (int i = 0; i < 18; ++i) {
+      motorToPolicy_[i] = motor_to_policy[i];
+      runConfig_.defaults[i] = defaults[i];
+    }
+    runConfig_.scalex = scales[0];
+    runConfig_.scaley = scales[1];
+    runConfig_.linVel = scales[2];
+    runConfig_.angVel = scales[3];
+    runConfig_.dofPos = scales[4];
+    runConfig_.dofVel = scales[5];
+    runConfig_.quat = scales[6];
+    runConfig_.clipObs = scales[7];
+  }
   void observe(const double* command, const double* angular_velocity,
                const double* roll_pitch, const double* joint_pos,
                const double* joint_vel, const float* last_actions) {
@@ -171,6 +187,7 @@ class UserController {
     propri_.baseEulerXyz(0) = roll_pitch[0];
     propri_.baseEulerXyz(1) = roll_pitch[1];
     for (int i = 0; i < actionsSize_; ++i) {
+      policyToMotor_[i] = i;
       propri_.jointPos(i) = joint_pos[i];
       propri_.jointVel(i) = joint_vel[i];
       lastActions_(i) = last_actions[i];
@@ -193,11 +210,31 @@ class UserController {
     }
     computeWalkObservation();
   }
+  void observeRun(const double* command, const double* angular_velocity,
+                  const double* gravity, const double* joint_pos,
+                  const double* joint_vel, const float* last_actions) {
+    for (int i = 0; i < 3; ++i) {
+      command_(i) = command[i];
+      propri_.baseAngVel(i) = angular_velocity[i];
+      propri_.projectedGravity(i) = gravity[i];
+    }
+    for (int motor = 0; motor < 18; ++motor) {
+      const int policy = motorToPolicy_[motor];
+      policyToMotor_[policy] = motor;
+      propri_.jointPos(motor) = joint_pos[policy];
+      propri_.jointVel(motor) = joint_vel[policy];
+      lastActions_(policy) = last_actions[policy];
+    }
+    computeRunObservation();
+  }
   const float* observations() const { return policyObservations_.data(); }
   const float* walkObservations() const { return walkObservations_.data(); }
+  const float* runObservations() const { return runObservations_.data(); }
   void resetObservations() { first_ = true; }
   void resetWalkObservations() { walkHistoryFirst_ = true; }
+  void resetRunObservations() { runHistoryFirst_ = true; }
   void enableWalkPolicy() { walkPolicyReady_ = true; }
+  void enableRunPolicy() { runPolicyReady_ = true; }
   int activePolicy() const { return static_cast<int>(activePolicy_); }
 
  private:
@@ -211,17 +248,20 @@ class UserController {
   SimVector<float> proprioHistoryBuffer_;
   std::vector<float> policyObservations_;
   std::vector<int> policyToMotor_, motorToPolicy_;
-  struct WalkConfig {
+  struct AuxPolicyConfig {
     std::array<double, 18> defaults{};
     double scalex = 0, scaley = 0, linVel = 0, angVel = 0;
     double dofPos = 0, dofVel = 0, quat = 0, clipObs = 0;
-  } walkConfig_;
+  } walkConfig_, runConfig_;
   std::vector<float> walkObservations_;
+  std::vector<float> runObservations_;
   struct { double axes[2]{}; int button[14]{}; } remote_data;
   WorkMode mode_ = WorkMode::DEFAULT;
   PolicyKind activePolicy_ = PolicyKind::DEFAULT;
   bool walkPolicyReady_ = false;
+  bool runPolicyReady_ = false;
   bool walkHistoryFirst_ = true;
+  bool runHistoryFirst_ = true;
   bool startcontrol = false;
   bool isChangeMode_ = false;
   double standPercent = 0;
@@ -255,12 +295,25 @@ void sim_walk_observation_reset(void* handle) {
   static_cast<legged::UserController*>(handle)->resetWalkObservations();
 }
 
+void sim_run_observation_configure(void* handle, const int* motor_to_policy,
+                                   const double* defaults, const double* scales) {
+  static_cast<legged::UserController*>(handle)->configureRun(motor_to_policy, defaults, scales);
+}
+
+void sim_run_observation_reset(void* handle) {
+  static_cast<legged::UserController*>(handle)->resetRunObservations();
+}
+
 int sim_remote_step(void* handle, const double* axes, const int* buttons, double* command) {
   return static_cast<legged::UserController*>(handle)->remoteStep(axes, buttons, command);
 }
 
 void sim_enable_walk_policy(void* handle) {
   static_cast<legged::UserController*>(handle)->enableWalkPolicy();
+}
+
+void sim_enable_run_policy(void* handle) {
+  static_cast<legged::UserController*>(handle)->enableRunPolicy();
 }
 
 int sim_active_policy(void* handle) {
@@ -293,11 +346,28 @@ int sim_walk_observation_step(void* handle, const double* command,
   }
 }
 
+int sim_run_observation_step(void* handle, const double* command,
+                             const double* angular_velocity, const double* gravity,
+                             const double* joint_pos, const double* joint_vel,
+                             const float* last_actions) {
+  try {
+    static_cast<legged::UserController*>(handle)->observeRun(
+        command, angular_velocity, gravity, joint_pos, joint_vel, last_actions);
+    return 0;
+  } catch (const std::exception&) {
+    return -1;
+  }
+}
+
 const float* sim_observation_data(void* handle) {
   return static_cast<legged::UserController*>(handle)->observations();
 }
 
 const float* sim_walk_observation_data(void* handle) {
   return static_cast<legged::UserController*>(handle)->walkObservations();
+}
+
+const float* sim_run_observation_data(void* handle) {
+  return static_cast<legged::UserController*>(handle)->runObservations();
 }
 }

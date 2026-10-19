@@ -25,6 +25,7 @@ XML = SDK / "robot" / "mjcf" / "N2.xml"
 TERRAIN_CONFIG = SDK / "config" / "sim_terrain.yaml"
 POLICY = SDK / "policy" / "policy.onnx"
 WALK_POLICY = SDK / "policy" / "policy_walk.onnx"
+RUN_POLICY = SDK / "policy" / "policy_run.onnx"
 CONTROLLER_CPP = SDK / "src" / "usercontroller.cpp"
 HWCONFIG = SDK / "config" / "hwconfig.yaml"
 STAND_JOINT_ANGLES = {
@@ -54,9 +55,9 @@ MOTOR_ORDER = (
 
 
 class SharedObservation:
-    """Compile and call the controller's default and walk observation functions."""
+    """Compile and call the controller's default, walk and run observation functions."""
 
-    def __init__(self, config, walk_config=None):
+    def __init__(self, config, walk_config=None, run_config=None):
         self.build_dir = tempfile.TemporaryDirectory(prefix="n2_sim_obs_")
         self.handle = None
         library = Path(self.build_dir.name) / "libsim_observation.so"
@@ -81,6 +82,7 @@ class SharedObservation:
                                                  ctypes.POINTER(ctypes.c_int), ctypes.POINTER(dbl)]
             self.lib.sim_remote_step.restype = ctypes.c_int
             self.lib.sim_enable_walk_policy.argtypes = [ptr]
+            self.lib.sim_enable_run_policy.argtypes = [ptr]
             self.lib.sim_active_policy.argtypes = [ptr]
             self.lib.sim_active_policy.restype = ctypes.c_int
             self.lib.sim_observation_step.argtypes = [ptr] * 7
@@ -94,6 +96,13 @@ class SharedObservation:
             self.lib.sim_walk_observation_step.restype = ctypes.c_int
             self.lib.sim_walk_observation_data.argtypes = [ptr]
             self.lib.sim_walk_observation_data.restype = ctypes.POINTER(ctypes.c_float)
+            self.lib.sim_run_observation_configure.argtypes = [
+                ptr, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(dbl), ctypes.POINTER(dbl)]
+            self.lib.sim_run_observation_reset.argtypes = [ptr]
+            self.lib.sim_run_observation_step.argtypes = [ptr] * 7
+            self.lib.sim_run_observation_step.restype = ctypes.c_int
+            self.lib.sim_run_observation_data.argtypes = [ptr]
+            self.lib.sim_run_observation_data.restype = ctypes.POINTER(ctypes.c_float)
             names = config["policy_joint_order"]
             size = config["size"]
             actions_size = int(size["actions_size"])
@@ -128,6 +137,25 @@ class SharedObservation:
                     walk_config["normalization"]["clip_scales"]["clip_observations"],
                 ], dtype=np.float64)
                 self.lib.sim_walk_observation_configure(
+                    self.handle, mapping.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
+                    defaults.ctypes.data_as(ctypes.POINTER(dbl)),
+                    values.ctypes.data_as(ctypes.POINTER(dbl)),
+                )
+            if run_config is not None:
+                if len(names) != 18 or set(names) != set(MOTOR_ORDER):
+                    raise ValueError("Run policy requires all 18 N2 joints")
+                mapping = np.array([names.index(name) for name in MOTOR_ORDER], dtype=np.int32)
+                run_defaults = run_config["init_state"]["default_joint_angle"]
+                defaults = np.array([run_defaults[name] for name in MOTOR_ORDER], dtype=np.float64)
+                run_scales = run_config["normalization"]["obs_scales"]
+                run_axis = run_config["axis_mappings"]
+                values = np.array([
+                    run_axis["scalex"], run_axis["scaley"], run_scales["lin_vel"],
+                    run_scales["ang_vel"], run_scales["dof_pos"], run_scales["dof_vel"],
+                    run_scales["quat"],
+                    run_config["normalization"]["clip_scales"]["clip_observations"],
+                ], dtype=np.float64)
+                self.lib.sim_run_observation_configure(
                     self.handle, mapping.ctypes.data_as(ctypes.POINTER(ctypes.c_int)),
                     defaults.ctypes.data_as(ctypes.POINTER(dbl)),
                     values.ctypes.data_as(ctypes.POINTER(dbl)),
@@ -185,6 +213,24 @@ class SharedObservation:
     def reset_walk(self):
         self.lib.sim_walk_observation_reset(self.handle)
 
+    def observe_run(self, command, angular_velocity, gravity, joint_pos, joint_vel, last_actions):
+        arrays = [np.ascontiguousarray(x, dtype=np.float64)
+                  for x in (command, angular_velocity, gravity, joint_pos, joint_vel)]
+        previous = np.ascontiguousarray(last_actions, dtype=np.float32)
+        status = self.lib.sim_run_observation_step(
+            self.handle, *(array.ctypes.data_as(ctypes.c_void_p) for array in arrays),
+            previous.ctypes.data_as(ctypes.c_void_p),
+        )
+        if status != 0:
+            raise ValueError("computeRunObservation() failed")
+        values = np.ctypeslib.as_array(
+            self.lib.sim_run_observation_data(self.handle), shape=(315,)
+        )
+        return values.copy()
+
+    def reset_run(self):
+        self.lib.sim_run_observation_reset(self.handle)
+
     def remote_step(self, axes, buttons):
         axis_values = (ctypes.c_double * 2)(*axes)
         button_values = (ctypes.c_int * 14)(*buttons)
@@ -194,6 +240,9 @@ class SharedObservation:
 
     def enable_walk_policy(self):
         self.lib.sim_enable_walk_policy(self.handle)
+
+    def enable_run_policy(self):
+        self.lib.sim_enable_run_policy(self.handle)
 
     def active_policy(self):
         return self.lib.sim_active_policy(self.handle)
@@ -226,10 +275,11 @@ def shape_matches(actual, expected):
 class SimPolicy:
     """Use the original C++ observation function with ONNX and MuJoCo."""
 
-    def __init__(self, config, policy, core, aux_inputs, walk_config=None):
+    def __init__(self, config, policy, core, aux_inputs, walk_config=None, run_config=None):
         self.policy = policy
         self.core = core
         self.walk = walk_config is not None
+        self.run = run_config is not None
         self.joints = config["policy_joint_order"]
         size = config["size"]
         self.actions_size = int(size["actions_size"])
@@ -241,6 +291,7 @@ class SimPolicy:
             [self.joints.index(f"leg_{side}{number}_joint")
              for side in ("l", "r") for number in range(1, 6)]
         ) if self.walk else None
+        self.run_indices = np.array([self.joints.index(name) for name in MOTOR_ORDER]) if self.run else None
         if min(self.actions_size, observation_size, stack_size) <= 0:
             raise ValueError("Policy sizes must be positive")
         if (len(self.joints) != self.actions_size or len(set(self.joints)) != len(self.joints)
@@ -252,7 +303,7 @@ class SimPolicy:
         if observation_input is None:
             raise ValueError(f"Unknown observation input {preferred!r}")
         shape = observation_input.shape
-        policy_frame_size = 39 if self.walk else observation_size
+        policy_frame_size = 39 if self.walk else 63 if self.run else observation_size
         expected = (1, stack_size * policy_frame_size) if len(shape) == 2 else (1, stack_size, policy_frame_size)
         if len(shape) not in (2, 3) or not shape_matches(shape, expected):
             raise ValueError(f"ONNX observation input {shape} does not match configured observations {expected}")
@@ -305,10 +356,13 @@ class SimPolicy:
             if metadata["joint_names"].split(",") != expected:
                 raise ValueError("ONNX joint_names differ from policy_joint_order")
 
-        policy_config = walk_config if self.walk else config
+        policy_config = walk_config if self.walk else run_config if self.run else config
         if self.walk and any(int(policy_config["size"][key]) != value for key, value in
                              (("actions_size", 10), ("observations_size", 39), ("stack_size", 5))):
             raise ValueError("Walk config must specify 5 x 39 observations and 10 actions")
+        if self.run and any(int(policy_config["size"][key]) != value for key, value in
+                            (("actions_size", 18), ("observations_size", 63), ("stack_size", 5))):
+            raise ValueError("Run config must specify 5 x 63 observations and 18 actions")
         control = policy_config["control"]
         defaults = policy_config["init_state"]["default_joint_angle"]
         self.default = np.array([defaults[name] for name in self.joints], dtype=np.float64)
@@ -332,6 +386,11 @@ class SimPolicy:
                 command, angular_velocity, projected_gravity(orientation),
                 joint_pos, joint_vel, self.last_actions,
             )
+        elif self.run:
+            obs = self.core.observe_run(
+                command, angular_velocity, projected_gravity(orientation),
+                joint_pos, joint_vel, self.last_actions,
+            )
         else:
             euler = euler_xyz(orientation)
             obs = self.core.observe(
@@ -350,6 +409,8 @@ class SimPolicy:
         if self.walk:
             self.last_actions.fill(0)
             self.last_actions[self.walk_indices] = clipped
+        elif self.run:
+            self.last_actions[self.run_indices] = clipped
         else:
             self.last_actions = clipped
         self.targets = self.default + self.last_actions * self.action_scale
@@ -357,6 +418,8 @@ class SimPolicy:
     def reset(self):
         if self.walk:
             self.core.reset_walk()
+        elif self.run:
+            self.core.reset_run()
         else:
             self.core.reset()
         self.last_actions.fill(0)
@@ -391,17 +454,22 @@ def simulate(args):
         print(f"joystick: {args.joystick_device}; enable {button_map[9]}, "
               f"stand {button_map[2]}+{button_map[10]}, "
               f"policy {button_map[2]}+{button_map[5]}, "
-              f"walk policy {button_map[2]}+{button_map[6]}", flush=True)
+              f"walk policy {button_map[2]}+{button_map[6]}, "
+              f"run policy {button_map[2]}+{button_map[7]}", flush=True)
         print(f"joystick axes: x={args.joystick_forward_sign}*axis{args.joystick_forward_axis}, "
               f"yaw={args.joystick_yaw_sign}*axis{args.joystick_yaw_axis}", flush=True)
     profiles = yaml.safe_load(args.config.read_text())
     if args.profile not in profiles:
         raise ValueError(f"Unknown config profile {args.profile!r}; available: {list(profiles)}")
     config = profiles[args.profile]
-    walk_config = yaml.safe_load(WALK_CONFIG.read_text())["walk"] if args.joystick else None
+    aux_config = yaml.safe_load(WALK_CONFIG.read_text()) if args.joystick else None
+    walk_config = aux_config["walk"] if aux_config else None
+    run_config = aux_config["run"] if aux_config else None
     policy = ort.InferenceSession(str(args.policy), providers=["CPUExecutionProvider"])
     walk_policy = (ort.InferenceSession(str(args.walk_policy), providers=["CPUExecutionProvider"])
                    if args.joystick else None)
+    run_policy = (ort.InferenceSession(str(args.run_policy), providers=["CPUExecutionProvider"])
+                  if args.joystick else None)
     if "policy_joint_order" not in config:
         metadata = policy.get_modelmeta().custom_metadata_map
         if "joint_names" in metadata:
@@ -415,8 +483,9 @@ def simulate(args):
         if not separator or not name or not path:
             raise ValueError(f"Invalid --aux-input {binding!r}; expected NAME=FILE.npy")
         aux_inputs[name] = Path(path)
-    with SharedObservation(config, walk_config) as core:
-        return run_simulation(args, config, walk_config, policy, walk_policy, core, aux_inputs)
+    with SharedObservation(config, walk_config, run_config) as core:
+        return run_simulation(args, config, walk_config, run_config,
+                              policy, walk_policy, run_policy, core, aux_inputs)
 
 
 def joystick_button_map(bindings):
@@ -426,8 +495,8 @@ def joystick_button_map(bindings):
         if not separator or not logical.isdecimal() or not physical.isdecimal():
             raise ValueError(f"Invalid --joystick-button-map {binding!r}; expected LOGICAL=PHYSICAL")
         logical, physical = int(logical), int(physical)
-        if logical not in (2, 5, 6, 9, 10, 11) or physical >= 32:
-            raise ValueError(f"Invalid --joystick-button-map {binding!r}; logical must be 2, 5, 6, 9, 10 or 11 and physical must be 0..31")
+        if logical not in (2, 5, 6, 7, 9, 10, 11) or physical >= 32:
+            raise ValueError(f"Invalid --joystick-button-map {binding!r}; logical must be 2, 5, 6, 7, 9, 10 or 11 and physical must be 0..31")
         mapping[logical] = physical
     return mapping
 
@@ -497,11 +566,14 @@ def add_terrain(spec, config):
     )
 
 
-def run_simulation(args, config, walk_config, policy, walk_policy, core, aux_inputs):
+def run_simulation(args, config, walk_config, run_config, policy, walk_policy, run_policy, core, aux_inputs):
     controllers = {0: SimPolicy(config, policy, core, aux_inputs)}
     if walk_policy is not None:
         controllers[1] = SimPolicy(config, walk_policy, core, aux_inputs, walk_config=walk_config)
         core.enable_walk_policy()
+    if run_policy is not None:
+        controllers[2] = SimPolicy(config, run_policy, core, aux_inputs, run_config=run_config)
+        core.enable_run_policy()
     active_policy = 0
     controller = controllers[active_policy]
     spec = mujoco.MjSpec.from_file(str(args.xml))
@@ -562,7 +634,7 @@ def run_simulation(args, config, walk_config, policy, walk_policy, core, aux_inp
                 active_policy = selected_policy
                 controller.reset()
                 walk_step = 0
-                print(f"remote policy: {'walk' if selected_policy else 'default'}", flush=True)
+                print(f"remote policy: {('default', 'walk', 'run')[selected_policy]}", flush=True)
             if next_mode != remote_mode:
                 transition_start = data.qpos[qpos_idx].copy()
                 transition_time = 0.0
@@ -654,6 +726,8 @@ def main():
     parser.add_argument("--policy", type=Path, default=POLICY)
     parser.add_argument("--walk-policy", type=Path, default=WALK_POLICY,
                         help="ONNX policy selected by joystick buttons 4+3")
+    parser.add_argument("--run-policy", type=Path, default=RUN_POLICY,
+                        help="ONNX policy selected by joystick buttons 4+0")
     parser.add_argument("--aux-input", action="append", default=[], metavar="NAME=FILE.npy",
                         help="extra ONNX input; accepts a static tensor or frame sequence")
     parser.add_argument("--duration", type=float, help="simulation seconds; unlimited with joystick, 10 without")
@@ -671,7 +745,7 @@ def main():
     parser.add_argument("--joystick-button-map", action="append", default=[], metavar="LOGICAL=PHYSICAL",
                         help="map a usercontroller button number to a physical button number")
     parser.add_argument("--joystick-debug", action="store_true", help="print physical axis and button events")
-    parser.add_argument("--vx", type=float, default=0.0, help="forward command, m/s")
+    parser.add_argument("--vx", type=float, default=0.0, help="forward input [-1,1], scaled by selected policy")
     parser.add_argument("--vy", type=float, default=0.0, help="lateral command, m/s")
     parser.add_argument("--yaw", type=float, default=0.0, help="yaw command, rad/s")
     parser.add_argument("--base-height", type=float, default=0.7, help="initial root height, m")
