@@ -4,7 +4,6 @@
 #include "controllerbase.h"
 #include "common.h"
 #include <onnxruntime/onnxruntime_cxx_api.h>
-#include <chrono>
 #include <eigen3/Eigen/Dense>
 #include <atomic>
 #ifdef RK3588
@@ -28,7 +27,7 @@ enum class WorkMode : uint8_t
     {
       std::map<std::string, float> stiffness;
       std::map<std::string, float> damping;
-      float actionScale;
+      std::map<std::string, float> actionScale;
       int decimation;
       float user_torque_limit;
       float user_power_limit;
@@ -142,6 +141,8 @@ public:
                                         "leg_r1_joint", "leg_r2_joint", "leg_r3_joint", "leg_r4_joint", "leg_r5_joint"
                                                                                
                                       };
+    std::vector<int> policyToMotor_;
+    std::vector<int> motorToPolicy_;
 
  
     Ort::MemoryInfo memoryInfo;
@@ -171,7 +172,6 @@ public:
     vector3_t basePosition_;
     vector_t lastActions_;
     vector_t defaultJointAngles_;
-    vector_t walkdefaultJointAngles_;
     int actuatedDofNum_;
     bool* isfirstRecObs_;
     int actionsSize_;
@@ -199,10 +199,10 @@ public:
                               0.0,0.0,0.0,0.0,0.0,
                               0.0,0.0,0.0,0.0,
                               0.0,0.0,0.0,0.0,0.0};
-    JointState standJointStatie_{0.0,0.0,0.0,0.0,
-                                0.0,0.0,-0.1495,0.3215,-0.1720,
-                                0.0,0.0,0.0,0.0,
-                                0.0,0.0,-0.1495,0.3215,-0.1720 };                            
+    JointState standJointStatie_{0.0,0.2,0.0,0.0,
+                                0.0,0.0,-0.25,0.5,-0.25,
+                                0.0,-0.2,0.0,0.0,
+                                0.0,0.0,-0.25,0.5,-0.25 };                            
     WorkMode  mode_;        
     bool isChangeMode_=false;                                 
     bool startcontrol = false; 
@@ -215,7 +215,6 @@ public:
     vector_t standJointAngles_;
     #ifdef RK3588
     rknn_context ctx =0;
-    std::vector<unsigned short> inputfp16;
     std::vector<rknn_tensor_attr> input_attrs;
     std::vector<rknn_tensor_attr> output_attrs;
     rknn_input_output_num io_num;

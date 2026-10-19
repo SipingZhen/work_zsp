@@ -2,11 +2,13 @@
 #include "controllerbase.h"
 #include "RotationTools.h"
 #include <algorithm>
+#include <cmath>
 #include "yaml-cpp/yaml.h"
 #include <iostream>
 #include <thread>
 #include <unistd.h>
 #include <stdio.h>
+#include <stdexcept>
 
 namespace legged
 {
@@ -109,24 +111,25 @@ namespace legged
   
   bool UserController::updateStateEstimation()
   {
-    vector_t jointPos(18), jointVel(18);
+    vector_t jointPosnoarm(18),jointVelnoarm(18);
 
     quaternion_t quat;
     vector3_t angularVel, linearAccel;
     std::array<MotorState,18> joint_state = controllerbase.get_joint_state();
     NingImuData imudata;
    
-    for (size_t i = 0; i < joint_state.size(); ++i)
+    // int j=0;
+    for (size_t i = 0; i < actuatedDofNum_; ++i)
     {
-      jointPos(i) = joint_state[i].pos;
-      jointVel(i) = joint_state[i].vel;
-      if(abs(jointPos(i)) == 12.5)
+
+      jointPosnoarm(i) = joint_state[i].pos ;
+      jointVelnoarm(i) = joint_state[i].vel ;
+      if(abs(jointPosnoarm(i)) == 12.5)
       {
         //LogError(" {} disconnect",jointNames[i]);
         return false;
       }
     }
- 
     imudata = controllerbase.get_imu_data();
     for (size_t i = 0; i < 4; ++i)
     {
@@ -140,8 +143,8 @@ namespace legged
     }
 
 
-    propri_.jointPos = jointPos;
-    propri_.jointVel = jointVel;
+    propri_.jointPos = jointPosnoarm;
+    propri_.jointVel = jointVelnoarm;
     propri_.baseAngVel = angularVel;
 
     vector3_t gravityVector(0, 0, -1);
@@ -418,7 +421,7 @@ namespace legged
     // compute observation & actions
     if (count % robotconfig.controlCfg.decimation == 0)
     {
-      count = 0;
+      count = 0;    
       computeObservation();
       #ifdef RK3588
       computeActionsrknn();
@@ -433,66 +436,25 @@ namespace legged
                     { return std::max(actionMin, std::min(actionMax, x)); });
     }
     // set action
-    int j =0;
     MotorCmd motorcmd;
     for (int i = 0; i < actionsSize_; i++)
     {
-      if (actionsSize_ == 18)
-        j = i;
-      else
-      {
-        if(i<5)
-          j = i+4;
-        if(i>4)
-          j = i+8;
-      }
-      std::string partName = jointNames[j];
-      scalar_t pos_des = actions_[i] * robotconfig.controlCfg.actionScale + defaultJointAngles_(j);
+      std::string partName = jointNames[i];
+      scalar_t pos_des = actions_[motorToPolicy_[i]] * robotconfig.controlCfg.actionScale.at(partName) + defaultJointAngles_(i);
       double stiffness = robotconfig.controlCfg.stiffness[partName]; // 根据关节名称获取刚度
       double damping = robotconfig.controlCfg.damping[partName]; // 根据关节名称获取阻尼
-      // std::cout << "joint_name:" << partName << "kp:" << stiffness << " kd:" << damping << std::endl;
+      // std::cout << "joint id: " << i << " joint_name:" << partName << " kp:" << stiffness << " kd:" << damping << std::endl;
       motorcmd.pos= pos_des;
       motorcmd.kp= stiffness;
       motorcmd.kd= damping;
-      motorcmd.motor_id = j;
+      motorcmd.motor_id = i;
       motorcmd.vel =0;
       motorcmd.tau = 0;
       controllerbase.set_joint(motorcmd);
-      // std::cout << "action:" << actions_[i] << std::endl;
-      lastActions_(i, 0) = actions_[i];
-       
-    }
-
-    if (actionsSize_ < 18)
-    {
-      for (int i = 0; i < 8; i++)
-      {
-        if(i<4)
-          j = i;
-        if(i>=4)
-          j = i+5;
-        std::string partName = jointNames[j];
-        scalar_t pos_des;    
-        std::array<MotorState,18> joint_state = controllerbase.get_joint_state();
-        double cur_pos =  joint_state[j].pos - defaultJointAngles_(j); 
-        pos_des = 0.75 * cur_pos + 0.25 *  defaultJointAngles_(j);
-        
-        double stiffness = robotconfig.controlCfg.stiffness[partName]; // 根据关节名称获取刚度
-        double damping = robotconfig.controlCfg.damping[partName]; // 根据关节名称获取阻尼
-        motorcmd.pos= pos_des;
-        motorcmd.kp= stiffness;
-        motorcmd.kd= damping;
-        motorcmd.motor_id = j;
-        motorcmd.vel =0;
-        motorcmd.tau = 0;
-        controllerbase.set_joint(motorcmd);
-
-        // std::cout << "joint_name:" << partName << "kp:" << stiffness << " kd:" << damping << std::endl;
-      }
+      lastActions_(motorToPolicy_[i], 0) = actions_[motorToPolicy_[i]];
     }
     count++;
     return true;
-  
   }
    
   void UserController::onnxdatainit()
@@ -548,7 +510,7 @@ namespace legged
     std::string policyFilePath;  
     int model_data_size =0;
     int ret = 0;
-    policyFilePath = modle_path+"/policy_user.rknn";
+    policyFilePath = modle_path+"/policy.rknn";  //TODO: change your policy at here
     unsigned char* model_data=load_model(policyFilePath.c_str(),&model_data_size);
     ret = rknn_init(&ctx,model_data,model_data_size,0,NULL);
     if(ret <0)
@@ -580,6 +542,11 @@ namespace legged
       return 0;
     }
     printf("model input num: %d,output num: %d \n",io_num.n_input,io_num.n_output);
+    if (io_num.n_input != 1 || io_num.n_output != 1)
+    {
+      printf("N2 policy requires one input and one output\n");
+      return false;
+    }
     input_attrs.resize(io_num.n_input);
     for(int i=0;i<io_num.n_input;i++){
       input_attrs[i].index =i;
@@ -610,10 +577,15 @@ namespace legged
     command_.resize(3);
     isfirstCompAct_ = true;
     isfirstRecObs_= NULL;
+    count = 0;
     
-    ret = getmodelparam();
-    inputfp16.resize(observationSize_ * stackSize_);
-    std::fill(inputfp16.begin(), inputfp16.end(), 0);
+    if (!getmodelparam()) return false;
+    if (input_attrs[0].n_elems != observationSize_ * stackSize_ || output_attrs[0].n_elems != actionsSize_)
+    {
+      printf("RKNN policy shape does not match N2 (expected %d inputs, %d outputs)\n",
+             observationSize_ * stackSize_, actionsSize_);
+      return false;
+    }
     
     #endif
     return true;
@@ -634,7 +606,7 @@ namespace legged
         return false;
     }
         
-    policyFilePath= modelpath+"/policy_user.onnx";
+    policyFilePath= modelpath+"/policy.onnx";
     printf("Load Onnx model from path : %s\n",policyFilePath.c_str());
 
     
@@ -659,7 +631,16 @@ namespace legged
     isfirstRecObs_= NULL;
     count = 0;
     onnxdatainit();
-    ret = getmodelparam();
+    if (!getmodelparam()) return false;
+    if (policyInputShapes_.size() != 1 || policyOutputShapes_.size() != 1 ||
+        (policyInputShapes_[0] != std::vector<int64_t>{1, observationSize_ * stackSize_} &&
+         policyInputShapes_[0] != std::vector<int64_t>{1, stackSize_, observationSize_}) ||
+        policyOutputShapes_[0].size() != 2 ||
+        (policyOutputShapes_[0][1] > 0 && policyOutputShapes_[0][1] != actionsSize_))
+    {
+      printf("ONNX policy shape does not match N2 (expected 310 inputs, 18 outputs)\n");
+      return false;
+    }
 
     printf("Load Onnx run model successfully !!!\n");
     return true;
@@ -715,7 +696,11 @@ namespace legged
         
     }     
 
-    controlCfg.actionScale = acconfig[modelname]["control"]["action_scale"].as<float>();
+    controlCfg.actionScale.clear();
+    for (const auto& pair : acconfig[modelname]["control"]["action_scale"])
+    {
+      controlCfg.actionScale[pair.first.as<std::string>()] = pair.second.as<float>();
+    }
     controlCfg.decimation = acconfig[modelname]["control"]["decimation"].as<int>();
     controlCfg.cycle_time = acconfig[modelname]["control"]["cycle_time"].as<float>();
  
@@ -732,6 +717,24 @@ namespace legged
     actionsSize_ = acconfig[modelname]["size"]["actions_size"].as<int>();
     observationSize_ = acconfig[modelname]["size"]["observations_size"].as<int>();
     stackSize_ = acconfig[modelname]["size"]["stack_size"].as<int>();
+    if (actionsSize_ != 18 || observationSize_ != 62 || stackSize_ != 5) return false;
+
+    policyToMotor_.clear();
+    motorToPolicy_.assign(jointNames.size(), -1);
+    for (const auto& name : acconfig[modelname]["policy_joint_order"])
+    {
+      const std::string joint = name.as<std::string>();
+      auto it = std::find(jointNames.begin(), jointNames.end(), joint);
+      if (it == jointNames.end()) throw std::runtime_error("Unknown policy joint: " + joint);
+      const int motor = std::distance(jointNames.begin(), it);
+      if (motorToPolicy_[motor] != -1) throw std::runtime_error("Duplicate policy joint: " + joint);
+      motorToPolicy_[motor] = policyToMotor_.size();
+      policyToMotor_.push_back(motor);
+    }
+    if (policyToMotor_.size() != jointNames.size() || controlCfg.actionScale.size() != jointNames.size())
+      throw std::runtime_error("Incomplete N2 policy joint order or action scales");
+    for (const auto& joint : jointNames)
+      if (!controlCfg.actionScale.count(joint)) throw std::runtime_error("Missing action scale for " + joint);
 
     scalez = acconfig[modelname]["axis_mappings"]["scalez"].as<float>();
     scaley = acconfig[modelname]["axis_mappings"]["scaley"].as<float>();
@@ -763,12 +766,12 @@ namespace legged
       defaultJointAngles_(i) = defaultJointAngles[i];
       //printf("defaultJointAngles[%d]  %f\n",i,modelcfg->defaultJointAngles_(i));
     }
-    walkdefaultJointAngles_ = defaultJointAngles_;
     return true;
   }
 
   void UserController::computeActionsrknn()
   { 
+    
     #ifdef RK3588
     rknn_input inputs[1];
     int ret;
@@ -777,25 +780,27 @@ namespace legged
         
     inputdata =(float*)policyObservations_.data();
     //std::cout<<"policyObservations_.size() "<<policyObservations_.size()<< std::endl;
-    for(int i=0;i<policyObservations_.size();i++)
-    {
-       inputfp16[i]=float_to_half(inputdata[i]);
-    }
     memset(inputs,0,sizeof(inputs));
     inputs[0].index= input_attrs[0].index;
-    inputs[0].type= input_attrs[0].type;
-    inputs[0].size= input_attrs[0].size;
+    inputs[0].type= RKNN_TENSOR_FLOAT32;
+    inputs[0].size= policyObservations_.size() * sizeof(tensor_element_t);
     inputs[0].fmt= input_attrs[0].fmt;
     inputs[0].pass_through= 0;
-    inputs[0].buf = inputfp16.data();
+    inputs[0].buf = inputdata;
 
     ret=rknn_inputs_set(ctx,1,inputs);
+    if (ret != 0)
+    {
+      printf("rknn_inputs_set failed: %d\n", ret);
+      return;
+    }
 
     ret=rknn_run(ctx,NULL);
 
     if(ret != 0)
     {
-      printf("rknn run failed\n");
+      printf("rknn run failed: %d\n", ret);
+      return;
     }
     rknn_output outputs[io_num.n_output];
     memset(outputs,0,sizeof(outputs));
@@ -806,6 +811,11 @@ namespace legged
       outputs[i].want_float =1;
     }
     ret=rknn_outputs_get(ctx,io_num.n_output,outputs,NULL);
+    if (ret != 0)
+    {
+      printf("rknn_outputs_get failed: %d\n", ret);
+      return;
+    }
     //printf("output buf size is %d,n_elems %d\n",outputs[0].size,output_attrs[0].n_elems);
     outdata = (float*)outputs[0].buf;
      if (isfirstCompAct_){
@@ -819,7 +829,7 @@ namespace legged
       isfirstCompAct_ = false;
     }
    
-    for(int i=0;i<output_attrs[0].n_elems;i++)
+    for(int i=0;i<actionsSize_;i++)
     {
        actions_[i] = outdata[i];
        //actions_[i] = half_to_float(outdata[i]);
@@ -831,6 +841,7 @@ namespace legged
   }
   void UserController::computeActions()
   {
+    std::cout << "******************onxx****************" << std::endl;
     std::vector<Ort::Value> policyInputValues;
     policyInputValues.push_back(Ort::Value::CreateTensor<tensor_element_t>(memoryInfo, policyObservations_.data(),policyObservations_.size(),
                                                                           policyInputShapes_[0].data(), policyInputShapes_[0].size()));
@@ -858,39 +869,69 @@ namespace legged
 
   void UserController::computeObservation()
   {
+    
+    std::atomic<scalar_t> comm_x;
+    std::atomic<scalar_t> comm_y;
+    
+    
     RobotCfg::ObsScales &obsScales = robotconfig.obsScales;
-
+    
+    // command
     vector_t proprioObs(observationSize_);
-    proprioObs.setZero();
-
-    if (*isfirstRecObs_)
-    {
-      for (size_t i = 0; i < stackSize_; i++)
-      {
-        proprioHistoryBuffer_.segment(i * observationSize_, observationSize_) = proprioObs.cast<tensor_element_t>();
-      }
-      *isfirstRecObs_ = false;
-    }
-
-    // 3维速度指令: [vx, vy, wz]
+    const bool firstObservation = *isfirstRecObs_;
+    if (firstObservation) lastActions_.setZero();
+    
     vector_t command(3);
-    command[0] = command_[0] * scalex * obsScales.linVel;
-    command[1] = command_[1] * scaley * obsScales.linVel;
+    comm_x = command_[0] * scalex;
+    comm_y = command_[1] * scaley;
+
+    // Apply a dead zone to the target, then limit each policy-frame change.
+    static scalar_t limitedX = 0.0;
+    if (firstObservation) limitedX = 0.0;
+    scalar_t targetX = comm_x * obsScales.linVel;
+    if (std::abs(targetX) < 0.3) targetX = 0.0;
+    const scalar_t deltaX = std::max(-0.05, std::min(0.05, targetX - limitedX));
+    limitedX += deltaX;
+
+    command[0] = limitedX;
+    command[1] = comm_y * obsScales.linVel;
     command[2] = command_[2] * obsScales.angVel;
 
+
+    
+    
     vector_t actions(lastActions_);
 
+    vector_t jointPosObs(actionsSize_);
+    vector_t jointVelObs(actionsSize_);
+    for (int i = 0; i < actionsSize_; ++i)
+    {
+      const int motor = policyToMotor_[i];
+      jointPosObs(i) = (propri_.jointPos(motor) - defaultJointAngles_(motor)) * obsScales.dofPos;
+      jointVelObs(i) = propri_.jointVel(motor) * obsScales.dofVel;
+    }
+
     proprioObs << command, // 3
-        propri_.baseAngVel * obsScales.angVel,  // 3
-        propri_.baseEulerXyz(0) * obsScales.quat,  // 1
-        propri_.baseEulerXyz(1) * obsScales.quat,  // 1
-        (propri_.jointPos - walkdefaultJointAngles_) * obsScales.dofPos,  // 18
-        propri_.jointVel * obsScales.dofVel,  // 18
+   	propri_.baseAngVel * obsScales.angVel,  // 3
+        propri_.baseEulerXyz(0),  // roll
+        propri_.baseEulerXyz(1),  // pitch
+        
+        jointPosObs,  // 18
+        jointVelObs,  // 18
         actions;  // 18
 
-    proprioHistoryBuffer_.head(proprioHistoryBuffer_.size() - observationSize_) =
-        proprioHistoryBuffer_.tail(proprioHistoryBuffer_.size() - observationSize_);
-    proprioHistoryBuffer_.tail(observationSize_) = proprioObs.cast<tensor_element_t>();
+    if (firstObservation)
+    {
+      for (int i = 0; i < stackSize_; i++)
+        proprioHistoryBuffer_.segment(i * observationSize_, observationSize_) = proprioObs.cast<tensor_element_t>();
+      *isfirstRecObs_ = false;
+    }
+    else
+    {
+      proprioHistoryBuffer_.head(proprioHistoryBuffer_.size() - observationSize_) =
+          proprioHistoryBuffer_.tail(proprioHistoryBuffer_.size() - observationSize_);
+      proprioHistoryBuffer_.tail(observationSize_) = proprioObs.cast<tensor_element_t>();
+    }
   
 
     //clang-format on
@@ -900,13 +941,6 @@ namespace legged
       // if(i < observationSize_)
       // std::cout << i << "obs:::" << estObservations_[i] << std::endl;
     }
-    // Limit observation range
-    scalar_t obsMin = -robotconfig.clipObs;
-    scalar_t obsMax = robotconfig.clipObs;
-    std::transform(policyObservations_.begin(), policyObservations_.end(), policyObservations_.begin(),
-                  [obsMin, obsMax](scalar_t x)
-                  { return std::max(obsMin, std::min(obsMax, x)); });
-
    
     
   }
