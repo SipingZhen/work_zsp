@@ -4,7 +4,6 @@
 #include <algorithm>
 #include "yaml-cpp/yaml.h"
 #include <iostream>
-#include <chrono>
 #include <thread>
 #include <unistd.h>
 #include <stdio.h>
@@ -110,44 +109,21 @@ namespace legged
   
   bool UserController::updateStateEstimation()
   {
-    vector_t jointPosnoarm(10),jointVelnoarm(10),jointTornoarm(10);
+    vector_t jointPos(18), jointVel(18);
 
     quaternion_t quat;
     vector3_t angularVel, linearAccel;
-    static int num=0;
     std::array<MotorState,18> joint_state = controllerbase.get_joint_state();
     NingImuData imudata;
-    std::chrono::microseconds now = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch());
    
-    int j=0;
-    
-    for (size_t i = 0; i < actuatedDofNum_; ++i)
+    for (size_t i = 0; i < joint_state.size(); ++i)
     {
-      if((i>=4) &&(i<=8))
+      jointPos(i) = joint_state[i].pos;
+      jointVel(i) = joint_state[i].vel;
+      if(abs(jointPos(i)) == 12.5)
       {
-        jointPosnoarm(j) = joint_state[i].pos ;
-        jointVelnoarm(j) = joint_state[i].vel ;
-        jointTornoarm(j) = joint_state[i].tau ;
-        if(abs(jointPosnoarm(j)) == 12.5)
-        {
-          //LogError(" {} disconnect",jointNames[i]);
-          return false;
-        }
-        j++;
-      }
-      if((i>=13) &&(i<=17))
-      {
-        jointPosnoarm(j) = joint_state[i].pos ;
-        jointVelnoarm(j) = joint_state[i].vel  ;
-        jointTornoarm(j) = joint_state[i].tau  ;
-        if(abs(jointPosnoarm(j)) == 12.5)
-        {
-          
-          //LogError(" {} disconnect",jointNames[i]);
-          return false;
-          
-        }
-        j++;
+        //LogError(" {} disconnect",jointNames[i]);
+        return false;
       }
     }
  
@@ -164,8 +140,8 @@ namespace legged
     }
 
 
-    propri_.jointPos = jointPosnoarm;
-    propri_.jointVel = jointVelnoarm;
+    propri_.jointPos = jointPos;
+    propri_.jointVel = jointVel;
     propri_.baseAngVel = angularVel;
 
     vector3_t gravityVector(0, 0, -1);
@@ -174,10 +150,6 @@ namespace legged
     propri_.projectedGravity = inverseRot * gravityVector;
     propri_.baseEulerXyz = quatToXyz(quat);
 
-    double seconds = now.count();
-    phase_ = seconds/1000000.0;
-
-    
     return true;
   }
   void UserController::handleDefautMode()
@@ -465,10 +437,15 @@ namespace legged
     MotorCmd motorcmd;
     for (int i = 0; i < actionsSize_; i++)
     {
-      if(i<5)
-        j = i+4;
-      if(i>4)
-        j = i+8;
+      if (actionsSize_ == 18)
+        j = i;
+      else
+      {
+        if(i<5)
+          j = i+4;
+        if(i>4)
+          j = i+8;
+      }
       std::string partName = jointNames[j];
       scalar_t pos_des = actions_[i] * robotconfig.controlCfg.actionScale + defaultJointAngles_(j);
       double stiffness = robotconfig.controlCfg.stiffness[partName]; // 根据关节名称获取刚度
@@ -486,29 +463,32 @@ namespace legged
        
     }
 
-    for (int i = 0; i < 8; i++)
+    if (actionsSize_ < 18)
     {
-      if(i<4)
-        j = i;
-      if(i>=4)
-        j = i+5;
-      std::string partName = jointNames[j];
-      scalar_t pos_des;    
-      std::array<MotorState,18> joint_state = controllerbase.get_joint_state();
-      double cur_pos =  joint_state[j].pos - defaultJointAngles_(j); 
-      pos_des = 0.75 * cur_pos + 0.25 *  defaultJointAngles_(j);
-      
-      double stiffness = robotconfig.controlCfg.stiffness[partName]; // 根据关节名称获取刚度
-      double damping = robotconfig.controlCfg.damping[partName]; // 根据关节名称获取阻尼
-      motorcmd.pos= pos_des;
-      motorcmd.kp= stiffness;
-      motorcmd.kd= damping;
-      motorcmd.motor_id = j;
-      motorcmd.vel =0;
-      motorcmd.tau = 0;
-      controllerbase.set_joint(motorcmd);
+      for (int i = 0; i < 8; i++)
+      {
+        if(i<4)
+          j = i;
+        if(i>=4)
+          j = i+5;
+        std::string partName = jointNames[j];
+        scalar_t pos_des;    
+        std::array<MotorState,18> joint_state = controllerbase.get_joint_state();
+        double cur_pos =  joint_state[j].pos - defaultJointAngles_(j); 
+        pos_des = 0.75 * cur_pos + 0.25 *  defaultJointAngles_(j);
+        
+        double stiffness = robotconfig.controlCfg.stiffness[partName]; // 根据关节名称获取刚度
+        double damping = robotconfig.controlCfg.damping[partName]; // 根据关节名称获取阻尼
+        motorcmd.pos= pos_des;
+        motorcmd.kp= stiffness;
+        motorcmd.kd= damping;
+        motorcmd.motor_id = j;
+        motorcmd.vel =0;
+        motorcmd.tau = 0;
+        controllerbase.set_joint(motorcmd);
 
-      // std::cout << "joint_name:" << partName << "kp:" << stiffness << " kd:" << damping << std::endl;
+        // std::cout << "joint_name:" << partName << "kp:" << stiffness << " kd:" << damping << std::endl;
+      }
     }
     count++;
     return true;
@@ -767,11 +747,6 @@ namespace legged
         robotconfig.initState.leg_r1_joint,robotconfig.initState.leg_r2_joint, robotconfig.initState.leg_r3_joint,
         robotconfig.initState.leg_r4_joint,robotconfig.initState.leg_r5_joint};
  
-    std::vector<scalar_t> walkdefaultJointAngles{
-        robotconfig.initState.leg_l1_joint, robotconfig.initState.leg_l2_joint, robotconfig.initState.leg_l3_joint,
-        robotconfig.initState.leg_l4_joint, robotconfig.initState.leg_l5_joint,
-        robotconfig.initState.leg_r1_joint, robotconfig.initState.leg_r2_joint, robotconfig.initState.leg_r3_joint,
-        robotconfig.initState.leg_r4_joint, robotconfig.initState.leg_r5_joint};     
     actuatedDofNum_ =  18;
      
      
@@ -783,17 +758,12 @@ namespace legged
     const int inputSize = stackSize_ * observationSize_;
     proprioHistoryBuffer_.resize(inputSize);
     defaultJointAngles_.resize(actuatedDofNum_);
-    walkdefaultJointAngles_.resize(actionsSize_);
     for (int i = 0; i < actuatedDofNum_; i++)
     {
       defaultJointAngles_(i) = defaultJointAngles[i];
       //printf("defaultJointAngles[%d]  %f\n",i,modelcfg->defaultJointAngles_(i));
     }
-    for (int i = 0; i < actionsSize_; i++)
-    {
-      walkdefaultJointAngles_(i) = walkdefaultJointAngles[i];
-      //printf("defaultJointAngles[%d]  %f\n",i,modelcfg->defaultJointAngles_(i));
-    }
+    walkdefaultJointAngles_ = defaultJointAngles_;
     return true;
   }
 
@@ -888,57 +858,35 @@ namespace legged
 
   void UserController::computeObservation()
   {
-    
-    std::atomic<scalar_t> comm_x;
-    std::atomic<scalar_t> comm_y;
-    
-    
     RobotCfg::ObsScales &obsScales = robotconfig.obsScales;
-    
-    // command
+
     vector_t proprioObs(observationSize_);
+    proprioObs.setZero();
+
     if (*isfirstRecObs_)
     {
-      
-      for (int i = 0; i < 40; i++)
-      {
-        proprioObs(i,0) = 0.0;
-      }
-
       for (size_t i = 0; i < stackSize_; i++)
       {
         proprioHistoryBuffer_.segment(i * observationSize_, observationSize_) = proprioObs.cast<tensor_element_t>();
       }
       *isfirstRecObs_ = false;
     }
-    
-    vector_t command(5);
-    comm_x = command_[0] * scalex;
-    comm_y = command_[1] * scaley;
- 
-    double phase = phase_/0.64;
-   
 
-    command[0] = sin(2*M_PI*phase);
-    command[1] = cos(2*M_PI*phase);
-    command[2] = comm_x * obsScales.linVel;
-    command[3] = comm_y * obsScales.linVel;
-    command[4] = command_[2] * obsScales.angVel;
+    // 3维速度指令: [vx, vy, wz]
+    vector_t command(3);
+    command[0] = command_[0] * scalex * obsScales.linVel;
+    command[1] = command_[1] * scaley * obsScales.linVel;
+    command[2] = command_[2] * obsScales.angVel;
 
-    
-    
     vector_t actions(lastActions_);
 
-    matrix_t commandScaler = Eigen::DiagonalMatrix<scalar_t, 3>(obsScales.linVel, obsScales.linVel, obsScales.angVel);
-
-    
-    proprioObs << command, // 5
+    proprioObs << command, // 3
         propri_.baseAngVel * obsScales.angVel,  // 3
         propri_.baseEulerXyz(0) * obsScales.quat,  // 1
         propri_.baseEulerXyz(1) * obsScales.quat,  // 1
-        (propri_.jointPos - walkdefaultJointAngles_) * obsScales.dofPos,  // 10
-        propri_.jointVel * obsScales.dofVel,  // 10
-        actions;  // 10
+        (propri_.jointPos - walkdefaultJointAngles_) * obsScales.dofPos,  // 18
+        propri_.jointVel * obsScales.dofVel,  // 18
+        actions;  // 18
 
     proprioHistoryBuffer_.head(proprioHistoryBuffer_.size() - observationSize_) =
         proprioHistoryBuffer_.tail(proprioHistoryBuffer_.size() - observationSize_);

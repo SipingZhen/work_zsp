@@ -127,8 +127,8 @@ user:
       height_measurements: 5.0
 
   size:
-    actions_size: 10
-    observations_size: 40
+    actions_size: 18
+    observations_size: 62
     actions_size_Run: 18
     observations_size_Run: 62
 

@@ -189,7 +189,6 @@ public:
     bool isfirstCompAct_{true};
     vector_t command_;
     Proprioception propri_;
-    double phase_;
     int64_t loopcount_;
     NingImuData imu_data;
     joydata remote_data;
