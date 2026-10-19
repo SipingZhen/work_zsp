@@ -19,7 +19,7 @@ python onnx2rknn/onnx2rknn.py
 
 完整的 Conda 环境安装、运行参数和排错步骤见 [N2 仿真安装与运行文档](docs/simulation-conda.md)。
 
-`noetix_sdk_release/src/sim2sim.py` 使用 N2 的 MJCF 和 ONNX 策略。每次启动 sim 都会用 `g++` 从 `usercontroller.cpp` 临时编译原有的 `UserController::computeObservation()`，并直接读取它生成的观测缓冲区；修改该函数后，无需同步 Python 观测代码。仿真适配类型放在 `include/sim_usercontroller_adapter.h`，实体控制器的函数主体保持原样。观测维度、历史帧数和动作维度从配置及 ONNX 形状读取；`--config` 和 `--profile` 可选择其他策略配置。不需要动作 NPZ 文件或 RKNN。
+`noetix_sdk_release/src/sim2sim.py` 使用 N2 的 MJCF 和 ONNX 策略。每次启动 sim 都会用 `g++` 从 `usercontroller.cpp` 临时编译 `UserController::computeObservation()` 和 `UserController::computeWalkObservation()`，并直接读取它们生成的观测缓冲区；修改这两个函数后，无需同步 Python 观测代码。仿真适配类型放在 `include/sim_usercontroller_adapter.h`。观测维度、历史帧数和动作维度从配置及 ONNX 形状读取；`--config` 和 `--profile` 可选择其他策略配置。不需要动作 NPZ 文件或 RKNN。
 
 ```bash
 python -m pip install -r noetix_sdk_release/requirements-sim.txt

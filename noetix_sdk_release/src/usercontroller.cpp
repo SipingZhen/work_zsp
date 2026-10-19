@@ -323,6 +323,16 @@ namespace legged
     Command  cmd;
     
     remote_data =controllerbase.get_jsdata();
+#if 1  // Set to 0 to disable button-number logging.
+    static bool previousButtons[14] = {};
+    for (int i = 0; i < 14; ++i)
+    {
+      const bool pressed = remote_data.button[i] != 0;
+      if (pressed && !previousButtons[i])
+        printf("Remote button pressed: %d\n", i);
+      previousButtons[i] = pressed;
+    }
+#endif
     double remoteCommand[3];
     readRemoteCommand(remoteCommand);
     cmd.x = remoteCommand[0];
@@ -663,41 +673,6 @@ namespace legged
     }
   }
 
-  void UserController::computeWalkObservation()
-  {
-    constexpr int frameSize = 39;
-    tensor_element_t frame[frameSize];
-    frame[0] = command_[0] * walkConfig_.scalex * walkConfig_.linVel;
-    frame[1] = command_[1] * walkConfig_.scaley * walkConfig_.linVel;
-    frame[2] = command_[2] * walkConfig_.angVel;
-    for (int i = 0; i < 3; ++i)
-    {
-      frame[3 + i] = propri_.baseAngVel(i) * walkConfig_.angVel;
-      frame[6 + i] = propri_.projectedGravity(i) * walkConfig_.quat;
-    }
-    for (int i = 0; i < 10; ++i)
-    {
-      const int motor = i < 5 ? i + 4 : i + 8;
-      const int policy = motorToPolicy_[motor];
-      frame[9 + i] = (propri_.jointPos(motor) - walkConfig_.defaults[motor]) * walkConfig_.dofPos;
-      frame[19 + i] = propri_.jointVel(motor) * walkConfig_.dofVel;
-      frame[29 + i] = lastActions_(policy);
-    }
-    for (auto& value : frame)
-      value = std::max(-walkConfig_.clipObs, std::min(walkConfig_.clipObs, static_cast<scalar_t>(value)));
-    if (walkHistoryFirst_)
-    {
-      for (int i = 0; i < 5; ++i)
-        std::copy_n(frame, frameSize, walkObservations_.begin() + i * frameSize);
-      walkHistoryFirst_ = false;
-    }
-    else
-    {
-      std::copy(walkObservations_.begin() + frameSize, walkObservations_.end(), walkObservations_.begin());
-      std::copy_n(frame, frameSize, walkObservations_.end() - frameSize);
-    }
-  }
-
   void UserController::computeWalkActions()
   {
     const std::array<int64_t, 2> shape{1, 195};
@@ -941,6 +916,57 @@ namespace legged
 #ifdef NOETIX_SIM_OBS
 namespace legged {
 #endif
+  void UserController::computeWalkObservation()
+  {
+    constexpr int frameSize = 39;
+    constexpr int legActions = 10;
+    constexpr int historyFrames = 5;
+
+    vector_t command(3);
+    command(0) = command_[0] * walkConfig_.scalex * walkConfig_.linVel;
+    command(1) = command_[1] * walkConfig_.scaley * walkConfig_.linVel;
+    command(2) = command_[2] * walkConfig_.angVel;
+
+    vector_t jointPosObs(legActions);
+    vector_t jointVelObs(legActions);
+    vector_t actions(legActions);
+    for (int i = 0; i < legActions; ++i)
+    {
+      const int motor = i < 5 ? i + 4 : i + 8;
+      const int policy = motorToPolicy_[motor];
+      jointPosObs(i) = (propri_.jointPos(motor) - walkConfig_.defaults[motor]) * walkConfig_.dofPos;
+      jointVelObs(i) = propri_.jointVel(motor) * walkConfig_.dofVel;
+      actions(i) = lastActions_(policy);
+    }
+
+    vector_t proprioObs(frameSize);
+    proprioObs << command,                                      // 3
+                    propri_.baseAngVel * walkConfig_.angVel,     // 3
+                    propri_.projectedGravity * walkConfig_.quat, // 3
+                    jointPosObs,                                 // 10
+                    jointVelObs,                                 // 10
+                    actions;                                     // 10
+
+    tensor_element_t frame[frameSize];
+    for (int i = 0; i < frameSize; ++i)
+    {
+      const scalar_t value = static_cast<tensor_element_t>(proprioObs(i));
+      frame[i] = std::max(-walkConfig_.clipObs, std::min(walkConfig_.clipObs, value));
+    }
+    if (walkHistoryFirst_)
+    {
+      for (int i = 0; i < historyFrames; ++i)
+        std::copy_n(frame, frameSize, walkObservations_.begin() + i * frameSize);
+      walkHistoryFirst_ = false;
+    }
+    else
+    {
+      for (int i = frameSize; i < frameSize * historyFrames; ++i)
+        walkObservations_[i - frameSize] = walkObservations_[i];
+      std::copy_n(frame, frameSize, walkObservations_.end() - frameSize);
+    }
+  }
+
   void UserController::readRemoteCommand(double* command) const
   {
     command[0] = remote_data.axes[1];

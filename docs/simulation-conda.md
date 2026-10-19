@@ -111,7 +111,7 @@ python noetix_sdk_release/src/sim2sim.py --no-joystick --headless --duration 5 -
 
 ## 5. 更换策略或配置
 
-可用 `--policy /path/to/new.onnx` 指定其他 ONNX 文件；需要不同参数时，再用 `--config /path/to/config.yaml --profile user` 指定配置。观测输入形状须与配置中的 `observations_size × stack_size` 对应，动作输出维度须与 `actions_size` 一致。关节顺序也须与策略元数据及 N2 模型一致。修改 `UserController::computeObservation()` 后，下次启动会重新编译该函数。
+可用 `--policy /path/to/new.onnx` 指定其他 ONNX 文件；需要不同参数时，再用 `--config /path/to/config.yaml --profile user` 指定配置。观测输入形状须与配置中的 `observations_size × stack_size` 对应，动作输出维度须与 `actions_size` 一致。关节顺序也须与策略元数据及 N2 模型一致。修改 `UserController::computeObservation()` 或 `UserController::computeWalkObservation()` 后，下次启动会重新编译相应函数。
 
 多输入模型可以重复使用 `--aux-input 输入名=文件.npy` 提供额外输入，也可以在配置段的 `sim_inputs` 中将输入名映射到文件路径（路径相对于配置文件所在目录）。文件可以是单个张量，也可以是在最前面增加策略步维度的 `.npy` 帧序列；脚本还接受 `.npz` 文件。若观测输入或动作输出不是模型的第一个输入/输出，分别设置 `sim_observation_input` 和 `sim_action_output`。额外数据仍须由使用者按策略的实际输入定义准备；本仓库没有为视觉等输入提供通用数据源。
 
