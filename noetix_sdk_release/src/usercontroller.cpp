@@ -1,3 +1,6 @@
+#ifdef NOETIX_SIM_OBS
+#include "sim_usercontroller_adapter.h"
+#else
 #include "usercontroller.h"
 #include "controllerbase.h"
 #include "RotationTools.h"
@@ -314,92 +317,18 @@ namespace legged
   void UserController::process()
   {
     
-    static int keyflag[14];
     if(initfinish == 0)
       return;    
     Command  cmd;
     
     remote_data =controllerbase.get_jsdata();
-    cmd.x =remote_data.axes[1];
-    cmd.y=0;
-    cmd.yaw =remote_data.axes[0];
+    double remoteCommand[3];
+    readRemoteCommand(remoteCommand);
+    cmd.x = remoteCommand[0];
+    cmd.y = remoteCommand[1];
+    cmd.yaw = remoteCommand[2];
     
-    if((remote_data.button[9] == 1)&&(keyflag[9] == 0))
-    {  
-      
-      if(!startcontrol)
-      {
-        startcontrol = true;
-        standPercent = 0;
-        mode_ = WorkMode::LIE;
-        keyflag[9] =1;
-        printf("TO LIE MODE\n");
-        
-      }else
-      {
-          startcontrol = false;
-          mode_ = WorkMode::DEFAULT;
-          keyflag[9] =1;
-          printf("stop control\n");
-      }
-        
-    }else if(remote_data.button[9] == 0)
-      keyflag[9] =0;
-    if((remote_data.button[10] == 1)&&(remote_data.button[2] == 1)&&(keyflag[10] == 0))
-    {
-      keyflag[10] =1;
-      if (startcontrol == true)
-      {
-        if (mode_ != WorkMode::STAND)
-        {
-          standPercent = 0;
-          mode_ = WorkMode::STAND;
-          printf("STAND2LIE\n");
-        }
-        else if (mode_ == WorkMode::LIE)
-        {
-          standPercent = 0;
-          mode_ = WorkMode::STAND;
-          printf("LIE2STAND\n");
-        }
-        
-      }  
-    }else if(remote_data.button[10] == 0)
-      keyflag[10] =0;
-    if((remote_data.button[5] == 1)&&(remote_data.button[2] == 1)&&(keyflag[5] == 0))
-    {
-      
-      if(mode_ == WorkMode::STAND )
-      {
-        standPercent = 0;
-        isChangeMode_ = true;
-        mode_ = WorkMode::USERWALK;
-        keyflag[5] =1;
-        printf("TO USERWALK MODE\n");
-      }
-      
-    }else if(remote_data.button[5] == 0)
-      keyflag[5] =0;
-    if((remote_data.button[11] == 1)&&(keyflag[11] == 0)) 
-    {
-      keyflag[11] =1;
-      if(mode_ == WorkMode::USERWALK)
-      {
-        isChangeMode_ = true;
-        mode_ = WorkMode::STAND;
-        printf("WALK2STAND\n");
-
-      }else if (mode_ == WorkMode::DEFAULT)
-      {
-        standPercent = 0;
-        printf("deftolie\n");
-        isChangeMode_ = true;
-        mode_ = WorkMode::LIE;
-
-      }
-      
-    }else if(remote_data.button[11] == 0)
-      keyflag[11] =0;
+    updateRemoteMode();
 
     switch (mode_)
     {
@@ -875,6 +804,99 @@ namespace legged
     
   }
 
+#endif // NOETIX_SIM_OBS
+#ifdef NOETIX_SIM_OBS
+namespace legged {
+#endif
+  void UserController::readRemoteCommand(double* command) const
+  {
+    command[0] = remote_data.axes[1];
+    command[1] = 0;
+    command[2] = remote_data.axes[0];
+  }
+
+  void UserController::updateRemoteMode()
+  {
+    static int keyflag[14];
+    if((remote_data.button[9] == 1)&&(keyflag[9] == 0))
+    {
+
+      if(!startcontrol)
+      {
+        startcontrol = true;
+        standPercent = 0;
+        mode_ = WorkMode::LIE;
+        keyflag[9] =1;
+        printf("TO LIE MODE\n");
+
+      }else
+      {
+          startcontrol = false;
+          mode_ = WorkMode::DEFAULT;
+          keyflag[9] =1;
+          printf("stop control\n");
+      }
+
+    }else if(remote_data.button[9] == 0)
+      keyflag[9] =0;
+    if((remote_data.button[10] == 1)&&(remote_data.button[2] == 1)&&(keyflag[10] == 0))
+    {
+      keyflag[10] =1;
+      if (startcontrol == true)
+      {
+        if (mode_ == WorkMode::LIE)
+        {
+          standPercent = 0;
+          mode_ = WorkMode::STAND;
+          printf("LIE2STAND\n");
+        }
+        else if (mode_ == WorkMode::STAND)
+        {
+          standPercent = 0;
+          mode_ = WorkMode::LIE;
+          printf("STAND2LIE\n");
+        }
+
+      }
+    }else if(remote_data.button[10] == 0)
+      keyflag[10] =0;
+    if((remote_data.button[5] == 1)&&(remote_data.button[2] == 1)&&(keyflag[5] == 0))
+    {
+
+      if(mode_ == WorkMode::STAND )
+      {
+        standPercent = 0;
+        isChangeMode_ = true;
+        mode_ = WorkMode::USERWALK;
+        keyflag[5] =1;
+        printf("TO USERWALK MODE\n");
+      }
+
+    }else if(remote_data.button[5] == 0)
+      keyflag[5] =0;
+    if((remote_data.button[11] == 1)&&(keyflag[11] == 0))
+    {
+      keyflag[11] =1;
+      if(mode_ == WorkMode::USERWALK)
+      {
+        isChangeMode_ = true;
+        mode_ = WorkMode::STAND;
+        printf("WALK2STAND\n");
+
+      }else if (mode_ == WorkMode::DEFAULT)
+      {
+        standPercent = 0;
+        printf("deftolie\n");
+        isChangeMode_ = true;
+        mode_ = WorkMode::LIE;
+
+      }
+
+    }else if(remote_data.button[11] == 0)
+      keyflag[11] =0;
+
+  }
+
   void UserController::computeObservation()
   {
     
@@ -904,6 +926,7 @@ namespace legged
     command[0] = limitedX;
     command[1] = comm_y * obsScales.linVel;
     command[2] = command_[2] * obsScales.angVel;
+    if (std::abs(command[0]) > 0.3) command[2] *= 0.6;
 
 
     

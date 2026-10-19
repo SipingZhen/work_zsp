@@ -136,6 +136,8 @@ public:
     
 
   private:
+    void readRemoteCommand(double* command) const;
+    void updateRemoteMode();
     std::vector<std::string> jointNames{"arm_l1_joint", "arm_l2_joint", "arm_l3_joint", "arm_l4_joint",
                                         "leg_l1_joint", "leg_l2_joint", "leg_l3_joint", "leg_l4_joint", "leg_l5_joint",
                                         "arm_r1_joint", "arm_r2_joint", "arm_r3_joint", "arm_r4_joint",

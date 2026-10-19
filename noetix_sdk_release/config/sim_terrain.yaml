@@ -1,0 +1,7 @@
+# The robot starts on flat ground and approaches the stairs along +X.
+steps: 10
+stair_width: 16       # m, full width across Y
+ramp_width: 16        # m, full width across Y
+step_height: 0.18      # m, rise of each step
+step_depth: 0.3       # m, tread depth along X
+ramp_angle_deg: 20     # degrees, downhill from the highest step to ground

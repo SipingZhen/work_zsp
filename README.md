@@ -15,6 +15,23 @@ python onnx2rknn/onnx2rknn.py
 
 第二条命令需要 RKNN Toolkit 2，生成 `noetix_sdk_release/policy/policy.rknn`。ARM 控制器使用该 RKNN 文件，必须先完成转换再上机。转换脚本会检查新 ONNX 的输入输出形状、关节顺序、默认角度、PD 增益和动作缩放是否与部署配置相符。修改 C++ 后也需要重新编译控制器。首次上机前应先确认 IMU 角速度坐标系和电机编号与当前硬件一致。
 
+## N2 MuJoCo 仿真
+
+完整的 Conda 环境安装、运行参数和排错步骤见 [N2 仿真安装与运行文档](docs/simulation-conda.md)。
+
+`noetix_sdk_release/src/sim2sim.py` 使用 N2 的 MJCF 和 ONNX 策略。每次启动 sim 都会用 `g++` 从 `usercontroller.cpp` 临时编译原有的 `UserController::computeObservation()`，并直接读取它生成的观测缓冲区；修改该函数后，无需同步 Python 观测代码。仿真适配类型放在 `include/sim_usercontroller_adapter.h`，实体控制器的函数主体保持原样。观测维度、历史帧数和动作维度从配置及 ONNX 形状读取；`--config` 和 `--profile` 可选择其他策略配置。不需要动作 NPZ 文件或 RKNN。
+
+```bash
+python -m pip install -r noetix_sdk_release/requirements-sim.txt
+python noetix_sdk_release/src/sim2sim.py --no-joystick --vx 0.5
+# 没有图形桌面时
+python noetix_sdk_release/src/sim2sim.py --no-joystick --headless --duration 3 --vx 0.5
+```
+
+仿真默认进入手柄模式，设备未连接时等待连接；使用 `--no-joystick` 可直接运行策略。仿真步长为 0.002 秒，策略更新间隔从配置的 `control.decimation` 读取；默认 N2 配置每 10 步更新一次（50 Hz）。无手柄模式下，`--vx`、`--vy`、`--yaw` 分别设置前进、横移和转向指令。MuJoCo 传感器代替实体 IMU 和关节反馈，ONNX Runtime 代替 RKNN 推理；硬件接口和这两部分的差异仍需单独核对。
+
+更换策略时需让配置中的 `size` 与 ONNX 输入形状一致，并在 `computeObservation()` 中生成对应观测；sim 会直接取该函数写入的缓冲区。额外的 ONNX 输入可以通过 `--aux-input 输入名=数据.npy` 提供，支持单个张量或按策略步排列的帧序列，也可以在配置项 `sim_inputs` 中写入输入名到文件路径的映射。多输入模型可以用 `sim_observation_input` 指定观测输入名，用 `sim_action_output` 指定动作输出名。当前仓库没有 GMT、AMP、感知策略的模型和数据定义，视觉帧等数据仍需由使用者提供。
+
 ## 项目结构
 
 - `noetix_sdk_release/`: Noetix机器人SDK发布版本（核心部分）
