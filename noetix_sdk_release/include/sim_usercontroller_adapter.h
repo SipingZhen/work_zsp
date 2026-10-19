@@ -13,6 +13,7 @@
 
 namespace legged {
 enum class WorkMode : uint8_t { STAND, LIE, USERWALK, DEFAULT };
+enum class PolicyKind : uint8_t { DEFAULT, WALK };
 using scalar_t = double;
 using tensor_element_t = float;
 
@@ -161,6 +162,8 @@ class UserController {
   }
   const float* observations() const { return policyObservations_.data(); }
   void resetObservations() { first_ = true; }
+  void enableWalkPolicy() { walkPolicyReady_ = true; }
+  int activePolicy() const { return static_cast<int>(activePolicy_); }
 
  private:
   int actionsSize_, observationSize_, stackSize_;
@@ -175,6 +178,9 @@ class UserController {
   std::vector<int> policyToMotor_;
   struct { double axes[2]{}; int button[14]{}; } remote_data;
   WorkMode mode_ = WorkMode::DEFAULT;
+  PolicyKind activePolicy_ = PolicyKind::DEFAULT;
+  bool walkPolicyReady_ = false;
+  bool walkHistoryFirst_ = true;
   bool startcontrol = false;
   bool isChangeMode_ = false;
   double standPercent = 0;
@@ -201,6 +207,14 @@ void sim_observation_reset(void* handle) {
 
 int sim_remote_step(void* handle, const double* axes, const int* buttons, double* command) {
   return static_cast<legged::UserController*>(handle)->remoteStep(axes, buttons, command);
+}
+
+void sim_enable_walk_policy(void* handle) {
+  static_cast<legged::UserController*>(handle)->enableWalkPolicy();
+}
+
+int sim_active_policy(void* handle) {
+  return static_cast<legged::UserController*>(handle)->activePolicy();
 }
 
 int sim_observation_step(void* handle, const double* command,

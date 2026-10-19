@@ -20,9 +20,11 @@ from sim_remote import DEFAULT_BUTTON_MAP, LinuxJoystick
 
 SDK = Path(__file__).resolve().parents[1]
 CONFIG = SDK / "config" / "ning_user.yaml"
+WALK_CONFIG = SDK / "config" / "ning_ac.yaml"
 XML = SDK / "robot" / "mjcf" / "N2.xml"
 TERRAIN_CONFIG = SDK / "config" / "sim_terrain.yaml"
 POLICY = SDK / "policy" / "policy.onnx"
+WALK_POLICY = SDK / "policy" / "policy_walk.onnx"
 CONTROLLER_CPP = SDK / "src" / "usercontroller.cpp"
 HWCONFIG = SDK / "config" / "hwconfig.yaml"
 STAND_JOINT_ANGLES = {
@@ -78,6 +80,9 @@ class SharedObservation:
             self.lib.sim_remote_step.argtypes = [ptr, ctypes.POINTER(dbl),
                                                  ctypes.POINTER(ctypes.c_int), ctypes.POINTER(dbl)]
             self.lib.sim_remote_step.restype = ctypes.c_int
+            self.lib.sim_enable_walk_policy.argtypes = [ptr]
+            self.lib.sim_active_policy.argtypes = [ptr]
+            self.lib.sim_active_policy.restype = ctypes.c_int
             self.lib.sim_observation_step.argtypes = [ptr] * 7
             self.lib.sim_observation_step.restype = ctypes.c_int
             self.lib.sim_observation_data.argtypes = [ptr]
@@ -143,12 +148,28 @@ class SharedObservation:
         mode = self.lib.sim_remote_step(self.handle, axis_values, button_values, command)
         return mode, command
 
-def roll_pitch(quat):
+    def enable_walk_policy(self):
+        self.lib.sim_enable_walk_policy(self.handle)
+
+    def active_policy(self):
+        return self.lib.sim_active_policy(self.handle)
+
+def euler_xyz(quat):
     """Match RotationTools.h quatToXyz; MuJoCo quaternion order is w, x, y, z."""
     w, x, y, z = quat
     roll = np.arctan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y))
     pitch = np.arcsin(np.clip(2 * (w * y - z * x), -1, 1))
-    return np.array((roll, pitch), dtype=np.float32)
+    yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+    return np.array((roll, pitch, yaw), dtype=np.float32)
+
+
+def projected_gravity(quat):
+    w, x, y, z = quat
+    return np.array((
+        -2 * (x * z - w * y),
+        -2 * (y * z + w * x),
+        -1 + 2 * (x * x + y * y),
+    ), dtype=np.float32)
 
 
 def shape_matches(actual, expected):
@@ -161,14 +182,22 @@ def shape_matches(actual, expected):
 class SimPolicy:
     """Use the original C++ observation function with ONNX and MuJoCo."""
 
-    def __init__(self, config, policy, core, aux_inputs):
+    def __init__(self, config, policy, core, aux_inputs, walk_config=None):
         self.policy = policy
         self.core = core
+        self.walk = walk_config is not None
         self.joints = config["policy_joint_order"]
         size = config["size"]
         self.actions_size = int(size["actions_size"])
         observation_size = int(size["observations_size"])
         stack_size = int(size["stack_size"])
+        self.frame_size = observation_size
+        self.stack_size = stack_size
+        self.walk_indices = np.array(
+            [self.joints.index(f"leg_{side}{number}_joint")
+             for side in ("l", "r") for number in range(1, 6)]
+        ) if self.walk else None
+        self.walk_history = None
         if min(self.actions_size, observation_size, stack_size) <= 0:
             raise ValueError("Policy sizes must be positive")
         if (len(self.joints) != self.actions_size or len(set(self.joints)) != len(self.joints)
@@ -180,7 +209,8 @@ class SimPolicy:
         if observation_input is None:
             raise ValueError(f"Unknown observation input {preferred!r}")
         shape = observation_input.shape
-        expected = (1, self.core.observation_size) if len(shape) == 2 else (1, stack_size, observation_size)
+        policy_frame_size = 39 if self.walk else observation_size
+        expected = (1, stack_size * policy_frame_size) if len(shape) == 2 else (1, stack_size, policy_frame_size)
         if len(shape) not in (2, 3) or not shape_matches(shape, expected):
             raise ValueError(f"ONNX observation input {shape} does not match configured observations {expected}")
         self.input_shape = expected
@@ -219,11 +249,12 @@ class SimPolicy:
         if output is None:
             raise ValueError(f"Unknown action output {output_name!r}")
         output_shape = output.shape
+        output_actions = 10 if self.walk else self.actions_size
         if len(output_shape) != 2 or (
             isinstance(output_shape[1], int) and output_shape[1] > 0
-            and output_shape[1] != self.actions_size
+            and output_shape[1] != output_actions
         ):
-            raise ValueError(f"ONNX output {output_shape} does not match {self.actions_size} actions")
+            raise ValueError(f"ONNX output {output_shape} does not match {output_actions} actions")
         self.output_name = output.name
         metadata = policy.get_modelmeta().custom_metadata_map
         if "joint_names" in metadata:
@@ -231,8 +262,12 @@ class SimPolicy:
             if metadata["joint_names"].split(",") != expected:
                 raise ValueError("ONNX joint_names differ from policy_joint_order")
 
-        control = config["control"]
-        defaults = config["init_state"]["default_joint_angle"]
+        policy_config = walk_config if self.walk else config
+        if self.walk and any(int(policy_config["size"][key]) != value for key, value in
+                             (("actions_size", 10), ("observations_size", 39), ("stack_size", 5))):
+            raise ValueError("Walk config must specify 5 x 39 observations and 10 actions")
+        control = policy_config["control"]
+        defaults = policy_config["init_state"]["default_joint_angle"]
         self.default = np.array([defaults[name] for name in self.joints], dtype=np.float64)
         self.kp = np.array([control["stiffness"][name] for name in self.joints], dtype=np.float64)
         self.kd = np.array([control["damping"][name] for name in self.joints], dtype=np.float64)
@@ -241,7 +276,11 @@ class SimPolicy:
             [scales[name] for name in self.joints] if isinstance(scales, dict)
             else [scales] * self.actions_size, dtype=np.float64,
         )
-        self.clip_actions = float(config["normalization"]["clip_scales"]["clip_actions"])
+        self.clip_actions = float(policy_config["normalization"]["clip_scales"]["clip_actions"])
+        if self.walk:
+            self.clip_obs = float(policy_config["normalization"]["clip_scales"]["clip_observations"])
+            self.obs_scales = policy_config["normalization"]["obs_scales"]
+            self.axis = policy_config["axis_mappings"]
         self.decimation = int(control["decimation"])
         if self.decimation <= 0:
             raise ValueError("control.decimation must be positive")
@@ -249,21 +288,50 @@ class SimPolicy:
         self.targets = self.default.copy()
 
     def update(self, command, angular_velocity, orientation, joint_pos, joint_vel, policy_step):
-        obs = self.core.observe(
-            command, angular_velocity, roll_pitch(orientation),
-            joint_pos, joint_vel, self.last_actions,
-        ).reshape(self.input_shape)
+        euler = euler_xyz(orientation)
+        if self.walk:
+            indices = self.walk_indices
+            frame = np.concatenate((
+                (command[0] * self.axis["scalex"] * self.obs_scales["lin_vel"],
+                 command[1] * self.axis["scaley"] * self.obs_scales["lin_vel"],
+                 command[2] * self.obs_scales["ang_vel"]),
+                angular_velocity * self.obs_scales["ang_vel"],
+                projected_gravity(orientation) * self.obs_scales["quat"],
+                (joint_pos[indices] - self.default[indices]) * self.obs_scales["dof_pos"],
+                joint_vel[indices] * self.obs_scales["dof_vel"],
+                self.last_actions[indices],
+            ))
+            frame = np.clip(frame, -self.clip_obs, self.clip_obs).astype(np.float32)
+            if self.walk_history is None:
+                self.walk_history = np.tile(frame, self.stack_size)
+            else:
+                self.walk_history[:-39] = self.walk_history[39:]
+                self.walk_history[-39:] = frame
+            obs = self.walk_history
+        else:
+            obs = self.core.observe(
+                command, angular_velocity, euler[:2],
+                joint_pos, joint_vel, self.last_actions,
+            )
+        obs = obs.reshape(self.input_shape)
         feeds = {self.input_name: obs}
         for name, (array, sequence) in self.aux_inputs.items():
             feeds[name] = array[min(policy_step, len(array) - 1)] if sequence else array
         actions = np.asarray(self.policy.run([self.output_name], feeds)[0]).reshape(-1)
-        if actions.size != self.actions_size or not np.all(np.isfinite(actions)):
-            raise ValueError(f"Policy must return {self.actions_size} finite actions")
-        self.last_actions = np.clip(actions, -self.clip_actions, self.clip_actions).astype(np.float32)
+        output_actions = 10 if self.walk else self.actions_size
+        if actions.size != output_actions or not np.all(np.isfinite(actions)):
+            raise ValueError(f"Policy must return {output_actions} finite actions")
+        clipped = np.clip(actions, -self.clip_actions, self.clip_actions).astype(np.float32)
+        if self.walk:
+            self.last_actions.fill(0)
+            self.last_actions[self.walk_indices] = clipped
+        else:
+            self.last_actions = clipped
         self.targets = self.default + self.last_actions * self.action_scale
 
     def reset(self):
         self.core.reset()
+        self.walk_history = None
         self.last_actions.fill(0)
         self.targets = self.default.copy()
 
@@ -295,14 +363,18 @@ def simulate(args):
         button_map.update(joystick_button_map(args.joystick_button_map))
         print(f"joystick: {args.joystick_device}; enable {button_map[9]}, "
               f"stand {button_map[2]}+{button_map[10]}, "
-              f"policy {button_map[2]}+{button_map[5]}", flush=True)
+              f"policy {button_map[2]}+{button_map[5]}, "
+              f"walk policy {button_map[2]}+{button_map[6]}", flush=True)
         print(f"joystick axes: x={args.joystick_forward_sign}*axis{args.joystick_forward_axis}, "
               f"yaw={args.joystick_yaw_sign}*axis{args.joystick_yaw_axis}", flush=True)
     profiles = yaml.safe_load(args.config.read_text())
     if args.profile not in profiles:
         raise ValueError(f"Unknown config profile {args.profile!r}; available: {list(profiles)}")
     config = profiles[args.profile]
+    walk_config = yaml.safe_load(WALK_CONFIG.read_text())["walk"] if args.joystick else None
     policy = ort.InferenceSession(str(args.policy), providers=["CPUExecutionProvider"])
+    walk_policy = (ort.InferenceSession(str(args.walk_policy), providers=["CPUExecutionProvider"])
+                   if args.joystick else None)
     if "policy_joint_order" not in config:
         metadata = policy.get_modelmeta().custom_metadata_map
         if "joint_names" in metadata:
@@ -317,7 +389,7 @@ def simulate(args):
             raise ValueError(f"Invalid --aux-input {binding!r}; expected NAME=FILE.npy")
         aux_inputs[name] = Path(path)
     with SharedObservation(config) as core:
-        return run_simulation(args, config, policy, core, aux_inputs)
+        return run_simulation(args, config, walk_config, policy, walk_policy, core, aux_inputs)
 
 
 def joystick_button_map(bindings):
@@ -327,8 +399,8 @@ def joystick_button_map(bindings):
         if not separator or not logical.isdecimal() or not physical.isdecimal():
             raise ValueError(f"Invalid --joystick-button-map {binding!r}; expected LOGICAL=PHYSICAL")
         logical, physical = int(logical), int(physical)
-        if logical not in (2, 5, 9, 10, 11) or physical >= 32:
-            raise ValueError(f"Invalid --joystick-button-map {binding!r}; logical must be 2, 5, 9, 10 or 11 and physical must be 0..31")
+        if logical not in (2, 5, 6, 9, 10, 11) or physical >= 32:
+            raise ValueError(f"Invalid --joystick-button-map {binding!r}; logical must be 2, 5, 6, 9, 10 or 11 and physical must be 0..31")
         mapping[logical] = physical
     return mapping
 
@@ -398,8 +470,13 @@ def add_terrain(spec, config):
     )
 
 
-def run_simulation(args, config, policy, core, aux_inputs):
-    controller = SimPolicy(config, policy, core, aux_inputs)
+def run_simulation(args, config, walk_config, policy, walk_policy, core, aux_inputs):
+    controllers = {0: SimPolicy(config, policy, core, aux_inputs)}
+    if walk_policy is not None:
+        controllers[1] = SimPolicy(config, walk_policy, core, aux_inputs, walk_config=walk_config)
+        core.enable_walk_policy()
+    active_policy = 0
+    controller = controllers[active_policy]
     spec = mujoco.MjSpec.from_file(str(args.xml))
     add_terrain(spec, yaml.safe_load(args.terrain_config.read_text()))
     model = spec.compile()
@@ -442,7 +519,7 @@ def run_simulation(args, config, policy, core, aux_inputs):
             lift_requested.set()
 
     def step(index):
-        nonlocal transition_start, transition_time, walk_step, remote_mode
+        nonlocal transition_start, transition_time, walk_step, remote_mode, active_policy, controller
         if joystick is not None:
             joystick.poll()
             next_mode_id, remote_command = core.remote_step(joystick.controller_axes(), joystick.buttons)
@@ -451,10 +528,18 @@ def run_simulation(args, config, policy, core, aux_inputs):
                 print(f"remote command: x={command[0]:+.2f}, yaw={command[2]:+.2f}", flush=True)
                 last_debug_command[:] = command[[0, 2]]
             next_mode = MODE_NAMES[next_mode_id]
+            selected_policy = core.active_policy()
+            policy_changed = selected_policy != active_policy
+            if policy_changed:
+                controller = controllers[selected_policy]
+                active_policy = selected_policy
+                controller.reset()
+                walk_step = 0
+                print(f"remote policy: {'walk' if selected_policy else 'default'}", flush=True)
             if next_mode != remote_mode:
                 transition_start = data.qpos[qpos_idx].copy()
                 transition_time = 0.0
-                if next_mode == "USERWALK":
+                if next_mode == "USERWALK" and not policy_changed:
                     controller.reset()
                     walk_step = 0
                 remote_mode = next_mode
@@ -540,6 +625,8 @@ def main():
     parser.add_argument("--terrain-config", type=Path, default=TERRAIN_CONFIG,
                         help="stair and downhill ramp dimensions in YAML")
     parser.add_argument("--policy", type=Path, default=POLICY)
+    parser.add_argument("--walk-policy", type=Path, default=WALK_POLICY,
+                        help="ONNX policy selected by joystick buttons 4+3")
     parser.add_argument("--aux-input", action="append", default=[], metavar="NAME=FILE.npy",
                         help="extra ONNX input; accepts a static tensor or frame sequence")
     parser.add_argument("--duration", type=float, help="simulation seconds; unlimited with joystick, 10 without")

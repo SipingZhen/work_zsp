@@ -4,7 +4,7 @@
 
 ## 与当前 N2 训练策略对齐
 
-`noetix_sdk_release/policy/policy.onnx` 是唯一的 ONNX 策略文件。策略输入是 5 帧 × 62 维（310 维），输出是 18 维动作，控制频率为 50 Hz。部署观测依次为速度指令 3、机体角速度 3、roll/pitch 2、相对默认关节角 18、关节速度 18、上一帧动作 18；关节按 `config/ning_user.yaml` 中的 `policy_joint_order` 排列，动作按每个关节的 `action_scale` 执行。首次进入行走模式时，5 帧历史均填入当前观测。
+`noetix_sdk_release/policy/policy.onnx` 是 4+2 选择的默认策略，输入是 5 帧 × 62 维（310 维），输出是 18 维动作，控制频率为 50 Hz。部署观测依次为速度指令 3、机体角速度 3、roll/pitch 2、相对默认关节角 18、关节速度 18、上一帧动作 18；关节按 `config/ning_user.yaml` 中的 `policy_joint_order` 排列，动作按每个关节的 `action_scale` 执行。`policy_walk.onnx` 由 4+3 选择，输入为 5 帧 × 39 维，使用机体系投影重力和左右腿各 5 个关节，输出 10 个腿关节动作；其观测缩放、默认角度、PD 参数和动作缩放来自 `config/ning_ac.yaml` 的 `walk` 配置，在 ARM 控制器上通过 ONNX Runtime 运行。切换策略时，5 帧历史均填入当前观测。
 
 更新策略时，将训练项目 `logs/rsl_rl/n2_walkrun/<run>/exported/policy.onnx` 复制到 `noetix_sdk_release/policy/policy.onnx`，再运行：
 

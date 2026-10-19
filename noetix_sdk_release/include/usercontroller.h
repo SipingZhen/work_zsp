@@ -7,6 +7,7 @@
 #include <chrono>
 #include <eigen3/Eigen/Dense>
 #include <atomic>
+#include <array>
 #ifdef RK3588
 #include "rknn_api.h"
 #endif
@@ -21,6 +22,8 @@ enum class WorkMode : uint8_t
   USERWALK,
   DEFAULT
 };
+
+enum class PolicyKind : uint8_t { DEFAULT, WALK };
 
   struct RobotCfg
   {
@@ -106,6 +109,7 @@ public:
     }
     bool init(ControlMode mode );
     bool loadModel(std::string modelpath);// override ;
+    bool loadWalkModel(const std::string& modelpath);
     bool loadrknnmodel(std::string modle_path);
     bool handleWalkMode() ;
     void setparameter(Command &cmd,bool* isfirst);
@@ -126,6 +130,8 @@ public:
    
    
     void computeActions() ;
+    void computeWalkActions();
+    void computeWalkObservation();
     void computeActionsrknn();
     void computeObservation() ;
    
@@ -157,6 +163,28 @@ public:
     int64_t count;
     RobotCfg robotconfig;
     std::unique_ptr<Ort::Session> policySessionPtr;
+    std::unique_ptr<Ort::Session> walkSessionPtr_;
+    std::string walkInputName_;
+    std::string walkOutputName_;
+    std::vector<tensor_element_t> walkObservations_;
+    bool walkHistoryFirst_ = true;
+    struct WalkConfig
+    {
+      std::array<scalar_t, 18> defaults{};
+      std::array<scalar_t, 18> stiffness{};
+      std::array<scalar_t, 18> damping{};
+      scalar_t actionScale = 0;
+      scalar_t linVel = 0;
+      scalar_t angVel = 0;
+      scalar_t dofPos = 0;
+      scalar_t dofVel = 0;
+      scalar_t quat = 0;
+      scalar_t scalex = 0;
+      scalar_t scaley = 0;
+      scalar_t clipObs = 0;
+      scalar_t clipActions = 0;
+      int decimation = 0;
+    } walkConfig_;
     std::unique_ptr<Ort::Session> estSessionPtr;
     std::vector<const char *> policyInputNames_;
     std::vector<const char *> policyOutputNames_;
@@ -208,6 +236,8 @@ public:
                                 0.0,-0.2,0.0,0.0,
                                 0.0,0.0,-0.25,0.5,-0.25 };                            
     WorkMode  mode_;        
+    PolicyKind activePolicy_ = PolicyKind::DEFAULT;
+    bool walkPolicyReady_ = false;
     bool isChangeMode_=false;                                 
     bool startcontrol = false; 
     int initfinish = 0;

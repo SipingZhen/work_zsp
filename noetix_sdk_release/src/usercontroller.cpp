@@ -5,6 +5,7 @@
 #include "controllerbase.h"
 #include "RotationTools.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include "yaml-cpp/yaml.h"
 #include <iostream>
@@ -356,18 +357,30 @@ namespace legged
     if(updateStateEstimation() == false)
        return false;
     // compute observation & actions
-    if (count % robotconfig.controlCfg.decimation == 0)
+    const int decimation = activePolicy_ == PolicyKind::WALK
+        ? walkConfig_.decimation : robotconfig.controlCfg.decimation;
+    if (count % decimation == 0)
     {
       count = 0;    
-      computeObservation();
-      #ifdef RK3588
-      computeActionsrknn();
-      #else
-      computeActions();
-      #endif
+      if (activePolicy_ == PolicyKind::WALK)
+      {
+        computeWalkObservation();
+        computeWalkActions();
+      }
+      else
+      {
+        computeObservation();
+        #ifdef RK3588
+        computeActionsrknn();
+        #else
+        computeActions();
+        #endif
+      }
       // limit action range
-      scalar_t actionMin = -robotconfig.clipActions;
-      scalar_t actionMax = robotconfig.clipActions;
+      const scalar_t clip = activePolicy_ == PolicyKind::WALK
+          ? walkConfig_.clipActions : robotconfig.clipActions;
+      scalar_t actionMin = -clip;
+      scalar_t actionMax = clip;
       std::transform(actions_.begin(), actions_.end(), actions_.begin(),
                     [actionMin, actionMax](scalar_t x)
                     { return std::max(actionMin, std::min(actionMax, x)); });
@@ -377,9 +390,12 @@ namespace legged
     for (int i = 0; i < actionsSize_; i++)
     {
       std::string partName = jointNames[i];
-      scalar_t pos_des = actions_[motorToPolicy_[i]] * robotconfig.controlCfg.actionScale.at(partName) + defaultJointAngles_(i);
-      double stiffness = robotconfig.controlCfg.stiffness[partName]; // 根据关节名称获取刚度
-      double damping = robotconfig.controlCfg.damping[partName]; // 根据关节名称获取阻尼
+      const bool walk = activePolicy_ == PolicyKind::WALK;
+      scalar_t pos_des = walk
+          ? actions_[motorToPolicy_[i]] * walkConfig_.actionScale + walkConfig_.defaults[i]
+          : actions_[motorToPolicy_[i]] * robotconfig.controlCfg.actionScale.at(partName) + defaultJointAngles_(i);
+      double stiffness = walk ? walkConfig_.stiffness[i] : robotconfig.controlCfg.stiffness[partName];
+      double damping = walk ? walkConfig_.damping[i] : robotconfig.controlCfg.damping[partName];
       // std::cout << "joint id: " << i << " joint_name:" << partName << " kp:" << stiffness << " kd:" << damping << std::endl;
       motorcmd.pos= pos_des;
       motorcmd.kp= stiffness;
@@ -581,6 +597,123 @@ namespace legged
 
     printf("Load Onnx run model successfully !!!\n");
     return true;
+  }
+
+  bool UserController::loadWalkModel(const std::string& modelpath)
+  {
+    try
+    {
+      if (!onnxEnvPrt_)
+        onnxEnvPrt_ = std::make_shared<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "LeggedOnnxController");
+      Ort::SessionOptions options;
+      options.SetInterOpNumThreads(1);
+      const std::string path = modelpath + "/policy_walk.onnx";
+      auto session = std::make_unique<Ort::Session>(*onnxEnvPrt_, path.c_str(), options);
+      if (session->GetInputCount() != 1 || session->GetOutputCount() != 1 ||
+          session->GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape() != std::vector<int64_t>{1, 195} ||
+          session->GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape() != std::vector<int64_t>{1, 10})
+      {
+        printf("Walk policy must have shape [1,195] -> [1,10]\n");
+        return false;
+      }
+      Ort::AllocatorWithDefaultOptions allocator;
+      const YAML::Node walk = YAML::LoadFile(modelpath + "/../config/ning_ac.yaml")["walk"];
+      if (walk["size"]["actions_size"].as<int>() != 10 ||
+          walk["size"]["observations_size"].as<int>() != 39 ||
+          walk["size"]["stack_size"].as<int>() != 5)
+        throw std::runtime_error("Walk config must specify 5 x 39 observations and 10 actions");
+      for (int i = 0; i < 18; ++i)
+      {
+        const std::string& name = jointNames[i];
+        walkConfig_.defaults[i] = walk["init_state"]["default_joint_angle"][name].as<scalar_t>();
+        walkConfig_.stiffness[i] = walk["control"]["stiffness"][name].as<scalar_t>();
+        walkConfig_.damping[i] = walk["control"]["damping"][name].as<scalar_t>();
+      }
+      walkConfig_.actionScale = walk["control"]["action_scale"].as<scalar_t>();
+      walkConfig_.decimation = walk["control"]["decimation"].as<int>();
+      walkConfig_.clipObs = walk["normalization"]["clip_scales"]["clip_observations"].as<scalar_t>();
+      walkConfig_.clipActions = walk["normalization"]["clip_scales"]["clip_actions"].as<scalar_t>();
+      auto scales = walk["normalization"]["obs_scales"];
+      walkConfig_.linVel = scales["lin_vel"].as<scalar_t>();
+      walkConfig_.angVel = scales["ang_vel"].as<scalar_t>();
+      walkConfig_.dofPos = scales["dof_pos"].as<scalar_t>();
+      walkConfig_.dofVel = scales["dof_vel"].as<scalar_t>();
+      walkConfig_.quat = scales["quat"].as<scalar_t>();
+      walkConfig_.scalex = walk["axis_mappings"]["scalex"].as<scalar_t>();
+      walkConfig_.scaley = walk["axis_mappings"]["scaley"].as<scalar_t>();
+      if (walkConfig_.decimation <= 0) throw std::runtime_error("Walk decimation must be positive");
+      walkInputName_ = session->GetInputNameAllocated(0, allocator).get();
+      walkOutputName_ = session->GetOutputNameAllocated(0, allocator).get();
+      walkObservations_.resize(195);
+      walkSessionPtr_ = std::move(session);
+      walkHistoryFirst_ = true;
+      walkPolicyReady_ = true;
+      printf("Loaded walk ONNX policy: %s\n", path.c_str());
+      return true;
+    }
+    catch (const Ort::Exception& error)
+    {
+      printf("Failed to load walk ONNX policy: %s\n", error.what());
+      return false;
+    }
+    catch (const std::exception& error)
+    {
+      printf("Failed to load walk configuration: %s\n", error.what());
+      return false;
+    }
+  }
+
+  void UserController::computeWalkObservation()
+  {
+    constexpr int frameSize = 39;
+    tensor_element_t frame[frameSize];
+    frame[0] = command_[0] * walkConfig_.scalex * walkConfig_.linVel;
+    frame[1] = command_[1] * walkConfig_.scaley * walkConfig_.linVel;
+    frame[2] = command_[2] * walkConfig_.angVel;
+    for (int i = 0; i < 3; ++i)
+    {
+      frame[3 + i] = propri_.baseAngVel(i) * walkConfig_.angVel;
+      frame[6 + i] = propri_.projectedGravity(i) * walkConfig_.quat;
+    }
+    for (int i = 0; i < 10; ++i)
+    {
+      const int motor = i < 5 ? i + 4 : i + 8;
+      const int policy = motorToPolicy_[motor];
+      frame[9 + i] = (propri_.jointPos(motor) - walkConfig_.defaults[motor]) * walkConfig_.dofPos;
+      frame[19 + i] = propri_.jointVel(motor) * walkConfig_.dofVel;
+      frame[29 + i] = lastActions_(policy);
+    }
+    for (auto& value : frame)
+      value = std::max(-walkConfig_.clipObs, std::min(walkConfig_.clipObs, static_cast<scalar_t>(value)));
+    if (walkHistoryFirst_)
+    {
+      for (int i = 0; i < 5; ++i)
+        std::copy_n(frame, frameSize, walkObservations_.begin() + i * frameSize);
+      walkHistoryFirst_ = false;
+    }
+    else
+    {
+      std::copy(walkObservations_.begin() + frameSize, walkObservations_.end(), walkObservations_.begin());
+      std::copy_n(frame, frameSize, walkObservations_.end() - frameSize);
+    }
+  }
+
+  void UserController::computeWalkActions()
+  {
+    const std::array<int64_t, 2> shape{1, 195};
+    auto input = Ort::Value::CreateTensor<tensor_element_t>(
+        memoryInfo, walkObservations_.data(), walkObservations_.size(), shape.data(), shape.size());
+    const char* inputName = walkInputName_.c_str();
+    const char* outputName = walkOutputName_.c_str();
+    Ort::RunOptions options;
+    auto outputs = walkSessionPtr_->Run(options, &inputName, &input, 1, &outputName, 1);
+    const auto* walkActions = outputs[0].GetTensorData<tensor_element_t>();
+    std::fill(actions_.begin(), actions_.end(), 0.0f);
+    for (int i = 0; i < 10; ++i)
+    {
+      const int motor = i < 5 ? i + 4 : i + 8;
+      actions_[motorToPolicy_[motor]] = walkActions[i];
+    }
   }
   
 
@@ -863,17 +996,35 @@ namespace legged {
     if((remote_data.button[5] == 1)&&(remote_data.button[2] == 1)&&(keyflag[5] == 0))
     {
 
-      if(mode_ == WorkMode::STAND )
+      if(mode_ == WorkMode::STAND || mode_ == WorkMode::USERWALK)
       {
         standPercent = 0;
         isChangeMode_ = true;
+        lastActions_.setZero();
+        activePolicy_ = PolicyKind::DEFAULT;
+        walkHistoryFirst_ = true;
         mode_ = WorkMode::USERWALK;
         keyflag[5] =1;
-        printf("TO USERWALK MODE\n");
+        printf("TO DEFAULT POLICY\n");
       }
 
     }else if(remote_data.button[5] == 0)
       keyflag[5] =0;
+    if((remote_data.button[6] == 1)&&(remote_data.button[2] == 1)&&(keyflag[6] == 0))
+    {
+      keyflag[6] = 1;
+      if(walkPolicyReady_ && (mode_ == WorkMode::STAND || mode_ == WorkMode::USERWALK))
+      {
+        standPercent = 0;
+        isChangeMode_ = true;
+        lastActions_.setZero();
+        activePolicy_ = PolicyKind::WALK;
+        walkHistoryFirst_ = true;
+        mode_ = WorkMode::USERWALK;
+        printf("TO WALK POLICY\n");
+      }
+    }else if(remote_data.button[6] == 0)
+      keyflag[6] = 0;
     if((remote_data.button[11] == 1)&&(keyflag[11] == 0))
     {
       keyflag[11] =1;
