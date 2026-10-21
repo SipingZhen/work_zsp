@@ -1,12 +1,12 @@
-# N2 ARM 部署项目
+# N2 部署项目
 
-本项目包含在基于ARM架构的设备上使用瑞芯微RKNN框架运行神经网络模型的部署脚本和工具，主要用于Noetix机器人控制系统。
+本项目用于 Noetix 机器人控制系统；x86_64 和 ARM64 构建均使用 ONNX Runtime 运行策略。
 
 ## 与当前 N2 训练策略对齐
 
-`noetix_sdk_release/policy/policy.onnx` 是首次单按物理键 2 进入的默认策略，其 ONNX 和 RKNN 路径在 `config/policy.yaml` 中配置，输入是 5 帧 × 62 维（310 维），输出是 18 维动作，控制频率为 50 Hz。部署观测依次为速度指令 3、机体角速度 3、roll/pitch 2、相对默认关节角 18、关节速度 18、上一帧动作 18；关节按 `config/ning_user.yaml` 中的 `policy_joint_order` 排列，动作按每个关节的 `action_scale` 执行。`policy_walk.onnx` 由 4+3 选择，输入为 5 帧 × 39 维，使用机体系投影重力和左右腿各 5 个关节，输出 10 个腿关节动作。`policy_run.onnx` 在仿真中由 4+0 选择，实机使用逻辑键 2+8，输入为 5 帧 × 63 维（315 维），使用机体系投影重力和全部 18 个关节，输出 18 个动作。walk 和 run 的观测缩放、默认角度、PD 参数及动作缩放分别来自 `config/ning_ac.yaml` 的对应配置，在 ARM 控制器上通过 ONNX Runtime 运行。切换策略时，5 帧历史均填入当前观测。
+`noetix_sdk_release/policy/policy.onnx` 是首次单按物理键 2 进入的默认策略，其路径在 `config/policy.yaml` 中配置，输入是 5 帧 × 62 维（310 维），输出是 18 维动作，控制频率为 50 Hz。部署观测依次为速度指令 3、机体角速度 3、roll/pitch 2、相对默认关节角 18、关节速度 18、上一帧动作 18；关节按 `config/ning_user.yaml` 中的 `policy_joint_order` 排列，动作按每个关节的 `action_scale` 执行。`policy_walk.onnx` 由 4+3 选择，输入为 5 帧 × 39 维，使用机体系投影重力和左右腿各 5 个关节，输出 10 个腿关节动作。`policy_run.onnx` 在仿真中由 4+0 选择，实机使用逻辑键 2+8，输入为 5 帧 × 63 维（315 维），使用机体系投影重力和全部 18 个关节，输出 18 个动作。walk 和 run 的观测缩放、默认角度、PD 参数及动作缩放分别来自 `config/ning_ac.yaml` 的对应配置，在 ARM 控制器上通过 ONNX Runtime 运行。切换策略时，5 帧历史均填入当前观测。
 
-`config/policy.yaml` 的 `default` 是首个默认策略，`alternates` 可按顺序添加同类策略的 ONNX 和 RKNN 路径。站立后单按物理键 2 进入首个默认策略；在默认策略运行时，每次再按 2 就轮换到下一个，末尾回到首个。Walk 和 Run 的按键不变。每个模型都必须与默认策略的观测、动作维度和关节配置一致；RK3588 上机前需为每项生成对应的 RKNN 文件，例如 `python onnx2rknn/onnx2rknn.py --onnx noetix_sdk_release/policy/policy-275.onnx --output noetix_sdk_release/policy/policy-275.rknn`。
+`config/policy.yaml` 的 `default` 是首个默认策略，`alternates` 可按顺序添加同类策略的 ONNX 路径。站立后单按物理键 2 进入首个默认策略；在默认策略运行时，每次再按 2 就轮换到下一个，末尾回到首个。Walk 和 Run 的按键不变。每个模型都必须与默认策略的观测、动作维度和关节配置一致。配置中保留的 `rknn` 路径仅供独立转换工具使用，控制器不会读取。
 
 run 模型没有关节顺序元数据；当前实现按来源分支 SDK 的电机顺序排列 run 的关节观测和动作：左臂 4、左腿 5、右臂 4、右腿 5。仿真会在此顺序与 `ning_user.yaml` 的关节顺序之间转换。
 
@@ -16,10 +16,9 @@ run 模型没有关节顺序元数据；当前实现按来源分支 SDK 的电�
 
 ```bash
 python onnx2rknn/onnx2rknn.py --validate-only
-python onnx2rknn/onnx2rknn.py
 ```
 
-第二条命令需要 RKNN Toolkit 2，生成 `config/policy.yaml` 的 `default.rknn` 指定的文件。ARM 控制器使用该 RKNN 文件，必须先完成转换再上机。转换脚本会检查新 ONNX 的输入输出形状、关节顺序、默认角度、PD 增益和动作缩放是否与部署配置相符。修改 C++ 后也需要重新编译控制器。首次上机前应先确认 IMU 角速度坐标系和电机编号与当前硬件一致。
+验证命令会检查新 ONNX 的输入输出形状、关节顺序、默认角度、PD 增益和动作缩放是否与部署配置相符。部署时直接使用 ONNX 文件，无需转换。修改 C++ 后也需要重新编译控制器。首次上机前应先确认 IMU 角速度坐标系和电机编号与当前硬件一致。
 
 ## N2 MuJoCo 仿真
 
@@ -34,7 +33,7 @@ python noetix_sdk_release/src/sim2sim.py --no-joystick --vx 0.5
 python noetix_sdk_release/src/sim2sim.py --no-joystick --headless --duration 3 --vx 0.5
 ```
 
-仿真默认进入手柄模式，设备未连接时等待连接；使用 `--no-joystick` 可直接运行策略。仿真步长为 0.002 秒，策略更新间隔从配置的 `control.decimation` 读取；默认 N2 配置每 10 步更新一次（50 Hz）。无手柄模式下，`--vx`、`--vy`、`--yaw` 分别设置前进、横移和转向指令。MuJoCo 传感器代替实体 IMU 和关节反馈，ONNX Runtime 代替 RKNN 推理；硬件接口和这两部分的差异仍需单独核对。
+仿真默认进入手柄模式，设备未连接时等待连接；使用 `--no-joystick` 可直接运行策略。仿真步长为 0.002 秒，策略更新间隔从配置的 `control.decimation` 读取；默认 N2 配置每 10 步更新一次（50 Hz）。无手柄模式下，`--vx`、`--vy`、`--yaw` 分别设置前进、横移和转向指令。MuJoCo 传感器代替实体 IMU 和关节反馈；硬件接口的差异仍需单独核对。
 
 更换策略时需让配置中的 `size` 与 ONNX 输入形状一致，并在 `computeObservation()` 中生成对应观测；sim 会直接取该函数写入的缓冲区。额外的 ONNX 输入可以通过 `--aux-input 输入名=数据.npy` 提供，支持单个张量或按策略步排列的帧序列，也可以在配置项 `sim_inputs` 中写入输入名到文件路径的映射。多输入模型可以用 `sim_observation_input` 指定观测输入名，用 `sim_action_output` 指定动作输出名。当前仓库没有 GMT、AMP、感知策略的模型和数据定义，视觉帧等数据仍需由使用者提供。
 
@@ -71,7 +70,6 @@ noetix_sdk_release/
 
 #### 2. 策略模型 (`policy/`)
 - `policy.onnx`: 当前 N2 训练策略
-- `policy.rknn`: 从该 ONNX 转换得到的 RKNN 模型（用于 NPU 加速）
 
 #### 3. 机器人配置 (`robot/`)
 机器人硬件配置文件：
@@ -127,7 +125,7 @@ chmod +x build_release.sh
 #### 更新策略模型
 1. 将新的 ONNX 模型保存到 `config/policy.yaml` 的 `default.onnx` 指定的位置
 2. 运行 `python onnx2rknn/onnx2rknn.py --validate-only` 检查模型与部署配置
-3. 运行 `python onnx2rknn/onnx2rknn.py` 生成 `policy.rknn`
+3. 在目标机器上重新编译并运行控制器
 
 #### 调试和监控
 ```bash
@@ -163,10 +161,10 @@ python3 onnx2rknn.py  # 转换ONNX模型到RKNN格式
 
 ## 环境要求
 
-- 基于Rockchip RK3588S的ARM设备
+- x86_64 或 ARM64 设备
 - Linux系统（推荐Ubuntu 20.04）
 - Python 3.6+
-- Rockchip NPU运行时环境
+- ONNX Runtime 运行库
 
 ## 故障排除
 
@@ -181,7 +179,7 @@ python3 onnx2rknn.py  # 转换ONNX模型到RKNN格式
 
 2. **模型推理失败**
    ```bash
-   # 检查RKNN环境
+   # 检查 ONNX Runtime 库路径
    echo $LD_LIBRARY_PATH
    # 检查模型文件
    ls -la noetix_sdk_release/policy/

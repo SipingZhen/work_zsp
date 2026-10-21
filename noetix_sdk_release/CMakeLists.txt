@@ -9,7 +9,6 @@ set(pybind11_DIR /home/${USER_NAME}/.local/lib/python3.8/site-packages/pybind11/
 # 找到 Python3 的库文件路径
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm.*|arm|aarch64")
   set(PYTHON_LIB_PATH /usr/lib/python3.8/config-3.8-aarch64-linux-gnu)
-  add_definitions(-DRK3588)
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64)|(AMD64)|(^i686)")
   set(PYTHON_LIB_PATH /usr/lib/python3.8/config-3.8-x86_64-linux-gnu)
 endif()
@@ -56,7 +55,6 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm.*|arm|aarch64")
       onnxruntime
       Threads::Threads
       spdlog::spdlog
-      rknnrt
   )
 else()
   target_link_libraries(noetix_joint_controller 
