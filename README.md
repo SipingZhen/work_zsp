@@ -4,20 +4,20 @@
 
 ## 与当前 N2 训练策略对齐
 
-`noetix_sdk_release/policy/policy.onnx` 是 4+2 选择的默认策略，输入是 5 帧 × 62 维（310 维），输出是 18 维动作，控制频率为 50 Hz。部署观测依次为速度指令 3、机体角速度 3、roll/pitch 2、相对默认关节角 18、关节速度 18、上一帧动作 18；关节按 `config/ning_user.yaml` 中的 `policy_joint_order` 排列，动作按每个关节的 `action_scale` 执行。`policy_walk.onnx` 由 4+3 选择，输入为 5 帧 × 39 维，使用机体系投影重力和左右腿各 5 个关节，输出 10 个腿关节动作。`policy_run.onnx` 在仿真中由 4+0 选择，实机使用逻辑键 2+8，输入为 5 帧 × 63 维（315 维），使用机体系投影重力和全部 18 个关节，输出 18 个动作。walk 和 run 的观测缩放、默认角度、PD 参数及动作缩放分别来自 `config/ning_ac.yaml` 的对应配置，在 ARM 控制器上通过 ONNX Runtime 运行。切换策略时，5 帧历史均填入当前观测。
+`noetix_sdk_release/policy/policy.onnx` 是 4+2 选择的默认策略，其 ONNX 和 RKNN 路径在 `config/policy.yaml` 中配置，输入是 5 帧 × 62 维（310 维），输出是 18 维动作，控制频率为 50 Hz。部署观测依次为速度指令 3、机体角速度 3、roll/pitch 2、相对默认关节角 18、关节速度 18、上一帧动作 18；关节按 `config/ning_user.yaml` 中的 `policy_joint_order` 排列，动作按每个关节的 `action_scale` 执行。`policy_walk.onnx` 由 4+3 选择，输入为 5 帧 × 39 维，使用机体系投影重力和左右腿各 5 个关节，输出 10 个腿关节动作。`policy_run.onnx` 在仿真中由 4+0 选择，实机使用逻辑键 2+8，输入为 5 帧 × 63 维（315 维），使用机体系投影重力和全部 18 个关节，输出 18 个动作。walk 和 run 的观测缩放、默认角度、PD 参数及动作缩放分别来自 `config/ning_ac.yaml` 的对应配置，在 ARM 控制器上通过 ONNX Runtime 运行。切换策略时，5 帧历史均填入当前观测。
 
 run 模型没有关节顺序元数据；当前实现按来源分支 SDK 的电机顺序排列 run 的关节观测和动作：左臂 4、左腿 5、右臂 4、右腿 5。仿真会在此顺序与 `ning_user.yaml` 的关节顺序之间转换。
 
 写入模型观测的 x、y、yaw 指令范围、滤波步长及死区在 `config/command.yaml` 中配置。当前 x 范围分别为：默认策略 `[-0.6, 1.0]`、walk `[-1.6, 1.4]`、run `[-1.0, 3.0]`。默认策略和 run 的目标 x 绝对值小于 0.3 时归零；run 的 yaw 输入绝对值小于 0.4 时归零。默认策略的 x 和 yaw、run 的 x 每次策略更新最多变化 0.05，滤波期间观测值会逐步接近目标。
 
-更新策略时，将训练项目 `logs/rsl_rl/n2_walkrun/<run>/exported/policy.onnx` 复制到 `noetix_sdk_release/policy/policy.onnx`，再运行：
+更新策略时，将训练项目 `logs/rsl_rl/n2_walkrun/<run>/exported/policy.onnx` 复制到 `config/policy.yaml` 的 `default.onnx` 指定的位置，再运行：
 
 ```bash
 python onnx2rknn/onnx2rknn.py --validate-only
 python onnx2rknn/onnx2rknn.py
 ```
 
-第二条命令需要 RKNN Toolkit 2，生成 `noetix_sdk_release/policy/policy.rknn`。ARM 控制器使用该 RKNN 文件，必须先完成转换再上机。转换脚本会检查新 ONNX 的输入输出形状、关节顺序、默认角度、PD 增益和动作缩放是否与部署配置相符。修改 C++ 后也需要重新编译控制器。首次上机前应先确认 IMU 角速度坐标系和电机编号与当前硬件一致。
+第二条命令需要 RKNN Toolkit 2，生成 `config/policy.yaml` 的 `default.rknn` 指定的文件。ARM 控制器使用该 RKNN 文件，必须先完成转换再上机。转换脚本会检查新 ONNX 的输入输出形状、关节顺序、默认角度、PD 增益和动作缩放是否与部署配置相符。修改 C++ 后也需要重新编译控制器。首次上机前应先确认 IMU 角速度坐标系和电机编号与当前硬件一致。
 
 ## N2 MuJoCo 仿真
 
@@ -123,7 +123,7 @@ chmod +x build_release.sh
 - 传感器校准值
 
 #### 更新策略模型
-1. 将新的 ONNX 模型保存为 `noetix_sdk_release/policy/policy.onnx`
+1. 将新的 ONNX 模型保存到 `config/policy.yaml` 的 `default.onnx` 指定的位置
 2. 运行 `python onnx2rknn/onnx2rknn.py --validate-only` 检查模型与部署配置
 3. 运行 `python onnx2rknn/onnx2rknn.py` 生成 `policy.rknn`
 

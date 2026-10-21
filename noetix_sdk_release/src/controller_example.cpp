@@ -22,10 +22,19 @@ int main()
     printf("usercontroller.init   failed\n");
     return 0;
   }
+  const YAML::Node policyConfig = YAML::LoadFile(path+"/config/policy.yaml");
   #ifdef RK3588
-      ret = usercontroller.loadrknnmodel(path+"/policy");
+    const std::string configuredPolicyPath = policyConfig["default"]["rknn"].as<std::string>();
   #else
-    ret = usercontroller.loadModel(path+"/policy");
+    const std::string configuredPolicyPath = policyConfig["default"]["onnx"].as<std::string>();
+  #endif
+  if (configuredPolicyPath.empty()) return 1;
+  const std::string defaultPolicyPath = configuredPolicyPath.front() == '/'
+      ? configuredPolicyPath : path+"/"+configuredPolicyPath;
+  #ifdef RK3588
+    ret = usercontroller.loadrknnmodel(defaultPolicyPath);
+  #else
+    ret = usercontroller.loadModel(defaultPolicyPath);
   #endif
   if (!ret) return 1;
   if (!usercontroller.loadWalkModel(path+"/policy")) return 1;

@@ -521,7 +521,7 @@ namespace legged
     std::string policyFilePath;  
     int model_data_size =0;
     int ret = 0;
-    policyFilePath = modle_path+"/policy.rknn";  //TODO: change your policy at here
+    policyFilePath = modle_path;
     unsigned char* model_data=load_model(policyFilePath.c_str(),&model_data_size);
     ret = rknn_init(&ctx,model_data,model_data_size,0,NULL);
     if(ret <0)
@@ -617,7 +617,7 @@ namespace legged
         return false;
     }
         
-    policyFilePath= modelpath+"/policy.onnx";
+    policyFilePath= modelpath;
     printf("Load Onnx model from path : %s\n",policyFilePath.c_str());
 
     
@@ -1306,7 +1306,7 @@ namespace legged {
     command[0] = defaultLimitedX_;
     command[1] = std::max(defaultMinY_, std::min(defaultMaxY_, command_[1] * obsScales.linVel));
     scalar_t targetYaw = command_[2] * obsScales.angVel;
-    if (std::abs(command[0]) > defaultXDeadzone_) targetYaw *= 0.6;
+    if (std::abs(command[0]) > 0.3) targetYaw *= 0.6;
     targetYaw = std::max(defaultMinYaw_, std::min(defaultMaxYaw_, targetYaw));
     defaultLimitedYaw_ += std::max(-defaultYawFilterStep_, std::min(defaultYawFilterStep_, targetYaw - defaultLimitedYaw_));
     command[2] = defaultLimitedYaw_;

@@ -8,8 +8,10 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-POLICY_DIR = ROOT / "noetix_sdk_release" / "policy"
 CONFIG = ROOT / "noetix_sdk_release" / "config" / "ning_user.yaml"
+POLICY_CONFIG = yaml.safe_load((ROOT / "noetix_sdk_release" / "config" / "policy.yaml").read_text())["default"]
+DEFAULT_ONNX = ROOT / "noetix_sdk_release" / POLICY_CONFIG["onnx"]
+DEFAULT_RKNN = ROOT / "noetix_sdk_release" / POLICY_CONFIG["rknn"]
 JOINT_SUFFIXES = {
     "arm_shoulder_pitch_joint": "arm_{}1_joint",
     "arm_shoulder_roll_joint": "arm_{}2_joint",
@@ -67,8 +69,8 @@ def validate_policy(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--onnx", type=Path, default=POLICY_DIR / "policy.onnx")
-    parser.add_argument("--output", type=Path, default=POLICY_DIR / "policy.rknn")
+    parser.add_argument("--onnx", type=Path, default=DEFAULT_ONNX)
+    parser.add_argument("--output", type=Path, default=DEFAULT_RKNN)
     parser.add_argument("--validate-only", action="store_true")
     args = parser.parse_args()
     validate_policy(args.onnx)

@@ -26,4 +26,4 @@ run:
   max_yaw: 1.0
   x_deadzone: 0.3
   yaw_deadzone: 0.4
-  x_filter_step: 0.05
+  x_filter_step: 0.1

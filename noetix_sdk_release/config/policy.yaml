@@ -1,0 +1,3 @@
+default:
+  onnx: policy/policy.onnx
+  rknn: policy/policy.rknn
