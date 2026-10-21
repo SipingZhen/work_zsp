@@ -226,7 +226,7 @@ namespace legged
           
           controllerbase.set_joint(motorcmd);
         }
-        else if((j > 4) && (j<9)){
+        else if((j >= 4) && (j<9)){
           
           motorcmd.pos=pos_des;
           motorcmd.kp=50;
@@ -237,7 +237,7 @@ namespace legged
           
           controllerbase.set_joint(motorcmd);
         }
-        else if((j > 9) && (j<13)){
+        else if((j >= 9) && (j<13)){
 
           motorcmd.pos=pos_des;
           motorcmd.kp=20;
@@ -300,7 +300,7 @@ namespace legged
             controllerbase.set_joint(motorcmd);
             
           }
-          else if((j > 4) && (j<9)){
+          else if((j >= 4) && (j<9)){
             motorcmd.pos=pos_des;
             motorcmd.kp=50;
             motorcmd.kd=1;
@@ -309,7 +309,7 @@ namespace legged
             motorcmd.tau = 0;
             controllerbase.set_joint(motorcmd);
           }
-          else if((j > 9) && (j<13)){
+          else if((j >= 9) && (j<13)){
 
             motorcmd.pos=pos_des;
             motorcmd.kp=20;
