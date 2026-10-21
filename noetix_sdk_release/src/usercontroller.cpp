@@ -85,6 +85,28 @@ namespace legged
     std::string path=std::string(buf);
     printf("cur path is %s\n",path.c_str());
     YAML::Node  acconfig = YAML::LoadFile(path+"/config/ning_user.yaml");
+    const YAML::Node commandConfig = YAML::LoadFile(path+"/config/command.yaml");
+    defaultMinX_ = commandConfig["default"]["min_x"].as<scalar_t>();
+    defaultMaxX_ = commandConfig["default"]["max_x"].as<scalar_t>();
+    defaultXFilterStep_ = commandConfig["default"]["x_filter_step"].as<scalar_t>();
+    defaultYawFilterStep_ = commandConfig["default"]["yaw_filter_step"].as<scalar_t>();
+    walkMinX_ = commandConfig["walk"]["min_x"].as<scalar_t>();
+    walkMaxX_ = commandConfig["walk"]["max_x"].as<scalar_t>();
+    runMinX_ = commandConfig["run"]["min_x"].as<scalar_t>();
+    runMaxX_ = commandConfig["run"]["max_x"].as<scalar_t>();
+    runMinAbsX_ = commandConfig["run"]["min_abs_x"].as<scalar_t>();
+    runYawDeadzone_ = commandConfig["run"]["yaw_deadzone"].as<scalar_t>();
+    runXFilterStep_ = commandConfig["run"]["x_filter_step"].as<scalar_t>();
+    const std::array<scalar_t, 11> commandValues{{
+        defaultMinX_, defaultMaxX_, defaultXFilterStep_, defaultYawFilterStep_,
+        walkMinX_, walkMaxX_, runMinX_, runMaxX_, runMinAbsX_, runYawDeadzone_, runXFilterStep_}};
+    if (!std::all_of(commandValues.begin(), commandValues.end(),
+                     [](scalar_t value) { return std::isfinite(value); }) ||
+        !(defaultMinX_ <= 0 && defaultMaxX_ >= 0 && walkMinX_ <= 0 && walkMaxX_ >= 0 &&
+          runMinX_ <= -runMinAbsX_ && runMaxX_ >= runMinAbsX_ &&
+          defaultXFilterStep_ > 0 && defaultYawFilterStep_ > 0 && runXFilterStep_ > 0 &&
+          runYawDeadzone_ >= 0))
+      throw std::runtime_error("Invalid command.yaml limits or filter steps");
     mode_ = WorkMode::DEFAULT;
     standDuration = 1000;
     standPercent = 0;

@@ -21,6 +21,7 @@ from sim_remote import DEFAULT_BUTTON_MAP, LinuxJoystick
 SDK = Path(__file__).resolve().parents[1]
 CONFIG = SDK / "config" / "ning_user.yaml"
 WALK_CONFIG = SDK / "config" / "ning_ac.yaml"
+COMMAND_CONFIG = SDK / "config" / "command.yaml"
 XML = SDK / "robot" / "mjcf" / "N2.xml"
 TERRAIN_CONFIG = SDK / "config" / "sim_terrain.yaml"
 POLICY = SDK / "policy" / "policy.onnx"
@@ -76,6 +77,8 @@ class SharedObservation:
             self.lib.sim_observation_create.restype = ptr
             self.lib.sim_observation_destroy.argtypes = [ptr]
             self.lib.sim_observation_destroy.restype = None
+            self.lib.sim_command_observation_configure.argtypes = [ptr, ctypes.POINTER(dbl)]
+            self.lib.sim_command_observation_configure.restype = None
             self.lib.sim_observation_reset.argtypes = [ptr]
             self.lib.sim_observation_reset.restype = None
             self.lib.sim_remote_step.argtypes = [ptr, ctypes.POINTER(dbl),
@@ -122,6 +125,24 @@ class SharedObservation:
             )
             if not self.handle:
                 raise RuntimeError("Failed to create C++ observation controller")
+            command_config = yaml.safe_load(COMMAND_CONFIG.read_text())
+            command_values = np.array([
+                command_config["default"]["min_x"], command_config["default"]["max_x"],
+                command_config["default"]["x_filter_step"], command_config["default"]["yaw_filter_step"],
+                command_config["walk"]["min_x"], command_config["walk"]["max_x"],
+                command_config["run"]["min_x"], command_config["run"]["max_x"],
+                command_config["run"]["min_abs_x"], command_config["run"]["yaw_deadzone"],
+                command_config["run"]["x_filter_step"],
+            ], dtype=np.float64)
+            dmin, dmax, dx_step, dyaw_step, wmin, wmax, rmin, rmax, rmin_abs, ryaw_deadzone, rx_step = command_values
+            if not np.all(np.isfinite(command_values)) or not (
+                dmin <= 0 <= dmax and wmin <= 0 <= wmax and
+                rmin <= -rmin_abs and rmax >= rmin_abs and
+                dx_step > 0 and dyaw_step > 0 and rx_step > 0 and ryaw_deadzone >= 0
+            ):
+                raise ValueError("Invalid command.yaml limits or filter steps")
+            self.lib.sim_command_observation_configure(
+                self.handle, command_values.ctypes.data_as(ctypes.POINTER(dbl)))
             if walk_config is not None:
                 if len(names) != 18 or set(names) != set(MOTOR_ORDER):
                     raise ValueError("Walk policy requires all 18 N2 joints")

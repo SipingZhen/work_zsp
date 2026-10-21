@@ -1,0 +1,16 @@
+default:
+  min_x: -0.6
+  max_x: 1.0
+  x_filter_step: 0.05
+  yaw_filter_step: 0.05
+
+walk:
+  min_x: -1.6
+  max_x: 1.4
+
+run:
+  min_x: -1.0
+  max_x: 3.0
+  min_abs_x: 0.3
+  yaw_deadzone: 0.4
+  x_filter_step: 0.05

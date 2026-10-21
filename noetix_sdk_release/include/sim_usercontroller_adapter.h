@@ -149,6 +149,19 @@ class UserController {
     scaley = scaley_value;
     robotconfig.obsScales = {lin_vel, ang_vel, dof_pos, dof_vel};
   }
+  void setCommandConfig(const double* values) {
+    defaultMinX_ = values[0];
+    defaultMaxX_ = values[1];
+    defaultXFilterStep_ = values[2];
+    defaultYawFilterStep_ = values[3];
+    walkMinX_ = values[4];
+    walkMaxX_ = values[5];
+    runMinX_ = values[6];
+    runMaxX_ = values[7];
+    runMinAbsX_ = values[8];
+    runYawDeadzone_ = values[9];
+    runXFilterStep_ = values[10];
+  }
   void configureWalk(const int* motor_to_policy, const double* defaults, const double* scales) {
     for (int i = 0; i < 18; ++i) {
       motorToPolicy_[i] = motor_to_policy[i];
@@ -245,17 +258,17 @@ class UserController {
   RobotCfg robotconfig;
   Proprioception propri_;
   vector_t lastActions_, defaultJointAngles_, command_;
-  const scalar_t defaultMinX_ = -0.6;
-  const scalar_t defaultMaxX_ = 1.0;
-  const scalar_t walkMinX_ = -1.6;
-  const scalar_t walkMaxX_ = 1.4;
-  const scalar_t runMinX_ = -1.0;
-  const scalar_t runMaxX_ = 3.0;
-  const scalar_t runMinAbsX_ = 0.3;
-  const scalar_t runYawDeadzone_ = 0.4;
-  const scalar_t defaultXFilterStep_ = 0.05;
-  const scalar_t defaultYawFilterStep_ = 0.05;
-  const scalar_t runXFilterStep_ = 0.05;
+  scalar_t defaultMinX_{};
+  scalar_t defaultMaxX_{};
+  scalar_t walkMinX_{};
+  scalar_t walkMaxX_{};
+  scalar_t runMinX_{};
+  scalar_t runMaxX_{};
+  scalar_t runMinAbsX_{};
+  scalar_t runYawDeadzone_{};
+  scalar_t defaultXFilterStep_{};
+  scalar_t defaultYawFilterStep_{};
+  scalar_t runXFilterStep_{};
   scalar_t defaultLimitedX_ = 0.0;
   scalar_t defaultLimitedYaw_ = 0.0;
   scalar_t runLimitedX_ = 0.0;
@@ -283,6 +296,10 @@ class UserController {
 }
 
 extern "C" {
+void sim_command_observation_configure(void* handle, const double* values) {
+  static_cast<legged::UserController*>(handle)->setCommandConfig(values);
+}
+
 void* sim_observation_create(int actions_size, int observation_size, int stack_size,
                              const double* defaults, double scalex, double scaley,
                              double lin_vel, double ang_vel, double dof_pos, double dof_vel) {
