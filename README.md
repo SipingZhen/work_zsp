@@ -8,7 +8,7 @@
 
 run 模型没有关节顺序元数据；当前实现按来源分支 SDK 的电机顺序排列 run 的关节观测和动作：左臂 4、左腿 5、右臂 4、右腿 5。仿真会在此顺序与 `ning_user.yaml` 的关节顺序之间转换。
 
-写入模型观测的 x 指令上下限、滤波步长、run 的最小非零 x 指令及 yaw 死区在 `config/command.yaml` 中配置。当前配置分别为：默认策略 x `[-0.6, 1.0]`、walk x `[-1.6, 1.4]`、run x `[-1.0, 3.0]`；默认策略的 x 和 yaw、run 的 x 每次策略更新最多变化 0.05，run 的非零 x 目标绝对值至少为 0.3，yaw 输入绝对值小于 0.4 时归零。滤波期间观测值会逐步接近目标。
+写入模型观测的 x、y、yaw 指令范围、滤波步长及死区在 `config/command.yaml` 中配置。当前 x 范围分别为：默认策略 `[-0.6, 1.0]`、walk `[-1.6, 1.4]`、run `[-1.0, 3.0]`。默认策略和 run 的目标 x 绝对值小于 0.3 时归零；run 的 yaw 输入绝对值小于 0.4 时归零。默认策略的 x 和 yaw、run 的 x 每次策略更新最多变化 0.05，滤波期间观测值会逐步接近目标。
 
 更新策略时，将训练项目 `logs/rsl_rl/n2_walkrun/<run>/exported/policy.onnx` 复制到 `noetix_sdk_release/policy/policy.onnx`，再运行：
 

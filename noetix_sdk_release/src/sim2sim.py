@@ -72,7 +72,7 @@ class SharedObservation:
             ptr = ctypes.c_void_p
             dbl = ctypes.c_double
             self.lib.sim_observation_create.argtypes = [
-                ctypes.c_int, ctypes.c_int, ctypes.c_int, ptr, dbl, dbl, dbl, dbl, dbl, dbl,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ptr, dbl, dbl, dbl, dbl,
             ]
             self.lib.sim_observation_create.restype = ptr
             self.lib.sim_observation_destroy.argtypes = [ptr]
@@ -117,28 +117,31 @@ class SharedObservation:
             defaults = config["init_state"]["default_joint_angle"]
             values = np.array([defaults[name] for name in names], dtype=np.float64)
             scales = config["normalization"]["obs_scales"]
-            axis = config["axis_mappings"]
             self.handle = self.lib.sim_observation_create(
                 actions_size, frame_size, stack_size,
-                values.ctypes.data_as(ptr), axis["scalex"], axis["scaley"],
+                values.ctypes.data_as(ptr),
                 scales["lin_vel"], scales["ang_vel"], scales["dof_pos"], scales["dof_vel"],
             )
             if not self.handle:
                 raise RuntimeError("Failed to create C++ observation controller")
             command_config = yaml.safe_load(COMMAND_CONFIG.read_text())
             command_values = np.array([
-                command_config["default"]["min_x"], command_config["default"]["max_x"],
-                command_config["default"]["x_filter_step"], command_config["default"]["yaw_filter_step"],
-                command_config["walk"]["min_x"], command_config["walk"]["max_x"],
-                command_config["run"]["min_x"], command_config["run"]["max_x"],
-                command_config["run"]["min_abs_x"], command_config["run"]["yaw_deadzone"],
-                command_config["run"]["x_filter_step"],
+                *[command_config["default"][key] for key in
+                  ("min_x", "max_x", "min_y", "max_y", "min_yaw", "max_yaw",
+                   "x_deadzone", "x_filter_step", "yaw_filter_step")],
+                *[command_config["walk"][key] for key in
+                  ("min_x", "max_x", "min_y", "max_y", "min_yaw", "max_yaw")],
+                *[command_config["run"][key] for key in
+                  ("min_x", "max_x", "min_y", "max_y", "min_yaw", "max_yaw",
+                   "x_deadzone", "yaw_deadzone", "x_filter_step")],
             ], dtype=np.float64)
-            dmin, dmax, dx_step, dyaw_step, wmin, wmax, rmin, rmax, rmin_abs, ryaw_deadzone, rx_step = command_values
+            dx_deadzone, dx_step, dyaw_step = command_values[6:9]
+            rx_deadzone, ryaw_deadzone, rx_step = command_values[21:24]
             if not np.all(np.isfinite(command_values)) or not (
-                dmin <= 0 <= dmax and wmin <= 0 <= wmax and
-                rmin <= -rmin_abs and rmax >= rmin_abs and
-                dx_step > 0 and dyaw_step > 0 and rx_step > 0 and ryaw_deadzone >= 0
+                all(command_values[i] <= 0 <= command_values[i + 1]
+                    for i in (0, 2, 4, 9, 11, 13, 15, 17, 19)) and
+                dx_step > 0 and dyaw_step > 0 and rx_step > 0 and
+                dx_deadzone >= 0 and rx_deadzone >= 0 and ryaw_deadzone >= 0
             ):
                 raise ValueError("Invalid command.yaml limits or filter steps")
             self.lib.sim_command_observation_configure(

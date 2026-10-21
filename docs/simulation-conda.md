@@ -108,8 +108,8 @@ python noetix_sdk_release/src/sim2sim.py --joystick
 python noetix_sdk_release/src/sim2sim.py --no-joystick --headless --duration 5 --vx 0.5 --yaw 0.2
 ```
 
-当前配置中 `axis_mappings.scaley` 是 `0.0`，因此默认配置下修改 `--vy` 不会改变送入策略的横向速度指令。前进指令还会经过观测函数的死区和逐帧限幅，第一帧不会立即达到 `--vx` 的值。
-默认、walk、run 的前进指令下限均为 -0.6；walk 的上限为 1，run 的上限为 2。walk 和 run 的 x 输入均限制在手柄轴范围 `[-1, 1]`，因此 `--vx` 超过 1 也不会继续增大前进指令。
+默认策略的横向速度指令固定为 `0.0`，因此修改 `--vy` 不会改变送入该策略的横向速度指令。前进指令还会经过观测函数的死区和逐帧限幅，第一帧不会立即达到 `--vx` 的值。
+默认、walk、run 的 x 指令范围分别为 `[-0.6, 1.0]`、`[-1.6, 1.4]`、`[-1.0, 3.0]`。walk 和 run 的 x 输入均限制在手柄轴范围 `[-1, 1]`，因此 `--vx` 超过 1 也不会继续增大前进指令。
 
 ## 5. 更换策略或配置
 

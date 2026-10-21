@@ -88,24 +88,44 @@ namespace legged
     const YAML::Node commandConfig = YAML::LoadFile(path+"/config/command.yaml");
     defaultMinX_ = commandConfig["default"]["min_x"].as<scalar_t>();
     defaultMaxX_ = commandConfig["default"]["max_x"].as<scalar_t>();
+    defaultMinY_ = commandConfig["default"]["min_y"].as<scalar_t>();
+    defaultMaxY_ = commandConfig["default"]["max_y"].as<scalar_t>();
+    defaultMinYaw_ = commandConfig["default"]["min_yaw"].as<scalar_t>();
+    defaultMaxYaw_ = commandConfig["default"]["max_yaw"].as<scalar_t>();
+    defaultXDeadzone_ = commandConfig["default"]["x_deadzone"].as<scalar_t>();
     defaultXFilterStep_ = commandConfig["default"]["x_filter_step"].as<scalar_t>();
     defaultYawFilterStep_ = commandConfig["default"]["yaw_filter_step"].as<scalar_t>();
     walkMinX_ = commandConfig["walk"]["min_x"].as<scalar_t>();
     walkMaxX_ = commandConfig["walk"]["max_x"].as<scalar_t>();
+    walkMinY_ = commandConfig["walk"]["min_y"].as<scalar_t>();
+    walkMaxY_ = commandConfig["walk"]["max_y"].as<scalar_t>();
+    walkMinYaw_ = commandConfig["walk"]["min_yaw"].as<scalar_t>();
+    walkMaxYaw_ = commandConfig["walk"]["max_yaw"].as<scalar_t>();
     runMinX_ = commandConfig["run"]["min_x"].as<scalar_t>();
     runMaxX_ = commandConfig["run"]["max_x"].as<scalar_t>();
-    runMinAbsX_ = commandConfig["run"]["min_abs_x"].as<scalar_t>();
+    runMinY_ = commandConfig["run"]["min_y"].as<scalar_t>();
+    runMaxY_ = commandConfig["run"]["max_y"].as<scalar_t>();
+    runMinYaw_ = commandConfig["run"]["min_yaw"].as<scalar_t>();
+    runMaxYaw_ = commandConfig["run"]["max_yaw"].as<scalar_t>();
+    runXDeadzone_ = commandConfig["run"]["x_deadzone"].as<scalar_t>();
     runYawDeadzone_ = commandConfig["run"]["yaw_deadzone"].as<scalar_t>();
     runXFilterStep_ = commandConfig["run"]["x_filter_step"].as<scalar_t>();
-    const std::array<scalar_t, 11> commandValues{{
-        defaultMinX_, defaultMaxX_, defaultXFilterStep_, defaultYawFilterStep_,
-        walkMinX_, walkMaxX_, runMinX_, runMaxX_, runMinAbsX_, runYawDeadzone_, runXFilterStep_}};
+    const std::array<scalar_t, 24> commandValues{{
+        defaultMinX_, defaultMaxX_, defaultMinY_, defaultMaxY_, defaultMinYaw_, defaultMaxYaw_,
+        defaultXDeadzone_, defaultXFilterStep_, defaultYawFilterStep_,
+        walkMinX_, walkMaxX_, walkMinY_, walkMaxY_, walkMinYaw_, walkMaxYaw_,
+        runMinX_, runMaxX_, runMinY_, runMaxY_, runMinYaw_, runMaxYaw_,
+        runXDeadzone_, runYawDeadzone_, runXFilterStep_}};
     if (!std::all_of(commandValues.begin(), commandValues.end(),
                      [](scalar_t value) { return std::isfinite(value); }) ||
-        !(defaultMinX_ <= 0 && defaultMaxX_ >= 0 && walkMinX_ <= 0 && walkMaxX_ >= 0 &&
-          runMinX_ <= -runMinAbsX_ && runMaxX_ >= runMinAbsX_ &&
+        !(defaultMinX_ <= 0 && defaultMaxX_ >= 0 && defaultMinY_ <= 0 && defaultMaxY_ >= 0 &&
+          defaultMinYaw_ <= 0 && defaultMaxYaw_ >= 0 &&
+          walkMinX_ <= 0 && walkMaxX_ >= 0 && walkMinY_ <= 0 && walkMaxY_ >= 0 &&
+          walkMinYaw_ <= 0 && walkMaxYaw_ >= 0 &&
+          runMinY_ <= 0 && runMaxY_ >= 0 && runMinYaw_ <= 0 && runMaxYaw_ >= 0 &&
+          runMinX_ <= 0 && runMaxX_ >= 0 &&
           defaultXFilterStep_ > 0 && defaultYawFilterStep_ > 0 && runXFilterStep_ > 0 &&
-          runYawDeadzone_ >= 0))
+          defaultXDeadzone_ >= 0 && runXDeadzone_ >= 0 && runYawDeadzone_ >= 0))
       throw std::runtime_error("Invalid command.yaml limits or filter steps");
     mode_ = WorkMode::DEFAULT;
     standDuration = 1000;
@@ -883,10 +903,6 @@ namespace legged
     for (const auto& joint : jointNames)
       if (!controlCfg.actionScale.count(joint)) throw std::runtime_error("Missing action scale for " + joint);
 
-    scalez = acconfig[modelname]["axis_mappings"]["scalez"].as<float>();
-    scaley = acconfig[modelname]["axis_mappings"]["scaley"].as<float>();
-    scalex = acconfig[modelname]["axis_mappings"]["scalex"].as<float>();
- 
     actions_.resize(actionsSize_);
  
     std::vector<scalar_t> defaultJointAngles{
@@ -1027,8 +1043,9 @@ namespace legged {
     vector_t command(3);
     command(0) = std::max(walkMinX_, std::min(walkMaxX_,
         std::max(-1.0, std::min(1.0, command_[0])) * walkConfig_.scalex * walkConfig_.linVel));
-    command(1) = command_[1] * walkConfig_.scaley * walkConfig_.linVel;
-    command(2) = command_[2] * walkConfig_.angVel;
+    command(1) = std::max(walkMinY_, std::min(walkMaxY_,
+        command_[1] * walkConfig_.scaley * walkConfig_.linVel));
+    command(2) = std::max(walkMinYaw_, std::min(walkMaxYaw_, command_[2] * walkConfig_.angVel));
 
     vector_t jointPosObs(legActions);
     vector_t jointVelObs(legActions);
@@ -1079,13 +1096,13 @@ namespace legged {
     if (runHistoryFirst_) runLimitedX_ = 0.0;
     scalar_t targetX = std::max(runMinX_, std::min(runMaxX_,
         std::max(-1.0, std::min(1.0, command_[0])) * runConfig_.scalex * runConfig_.linVel));
-    // Keep neutral at zero; nonzero commands have at least 0.3 magnitude.
-    if (targetX > 0.0) targetX = std::max(runMinAbsX_, targetX);
-    else if (targetX < 0.0) targetX = std::min(-runMinAbsX_, targetX);
+    if (std::abs(targetX) < runXDeadzone_) targetX = 0.0;
     runLimitedX_ += std::max(-runXFilterStep_, std::min(runXFilterStep_, targetX - runLimitedX_));
     command(0) = runLimitedX_;
-    command(1) = command_[1] * runConfig_.scaley * runConfig_.linVel;
-    command(2) = (std::abs(command_[2]) < runYawDeadzone_ ? 0.0 : command_[2]) * runConfig_.angVel;
+    command(1) = std::max(runMinY_, std::min(runMaxY_,
+        command_[1] * runConfig_.scaley * runConfig_.linVel));
+    command(2) = std::max(runMinYaw_, std::min(runMaxYaw_,
+        (std::abs(command_[2]) < runYawDeadzone_ ? 0.0 : command_[2]) * runConfig_.angVel));
 
     vector_t jointPosObs(18);
     vector_t jointVelObs(18);
@@ -1266,10 +1283,6 @@ namespace legged {
   void UserController::computeObservation()
   {
     
-    std::atomic<scalar_t> comm_x;
-    std::atomic<scalar_t> comm_y;
-    
-    
     RobotCfg::ObsScales &obsScales = robotconfig.obsScales;
     
     // command
@@ -1278,9 +1291,6 @@ namespace legged {
     if (firstObservation) lastActions_.setZero();
     
     vector_t command(3);
-    comm_x = command_[0] * scalex;
-    comm_y = command_[1] * scaley;
-
     // Apply a dead zone to the target, then limit each policy-frame change.
     if (firstObservation)
     {
@@ -1288,15 +1298,16 @@ namespace legged {
       defaultLimitedYaw_ = 0.0;
     }
     scalar_t targetX = std::max(defaultMinX_, std::min(defaultMaxX_,
-        static_cast<scalar_t>(comm_x) * obsScales.linVel));
-    if (std::abs(targetX) < 0.3) targetX = 0.0;
+        command_[0] * obsScales.linVel));
+    if (std::abs(targetX) < defaultXDeadzone_) targetX = 0.0;
     const scalar_t deltaX = std::max(-defaultXFilterStep_, std::min(defaultXFilterStep_, targetX - defaultLimitedX_));
     defaultLimitedX_ += deltaX;
 
     command[0] = defaultLimitedX_;
-    command[1] = comm_y * obsScales.linVel;
+    command[1] = std::max(defaultMinY_, std::min(defaultMaxY_, command_[1] * obsScales.linVel));
     scalar_t targetYaw = command_[2] * obsScales.angVel;
-    if (std::abs(command[0]) > 0.3) targetYaw *= 0.6;
+    if (std::abs(command[0]) > defaultXDeadzone_) targetYaw *= 0.6;
+    targetYaw = std::max(defaultMinYaw_, std::min(defaultMaxYaw_, targetYaw));
     defaultLimitedYaw_ += std::max(-defaultYawFilterStep_, std::min(defaultYawFilterStep_, targetYaw - defaultLimitedYaw_));
     command[2] = defaultLimitedYaw_;
 
@@ -1318,7 +1329,6 @@ namespace legged {
    	propri_.baseAngVel * obsScales.angVel,  // 3
         propri_.baseEulerXyz(0),  // roll
         propri_.baseEulerXyz(1),  // pitch
-        
         jointPosObs,  // 18
         jointVelObs,  // 18
         actions;  // 18

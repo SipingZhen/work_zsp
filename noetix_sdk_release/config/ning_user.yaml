@@ -126,8 +126,3 @@ user:
     observations_size: 62
     observations_size_bydmimic: 99
     stack_size: 5
-
-  axis_mappings:
-    scalez: 0.8
-    scalex: 1.0
-    scaley: 0.0   

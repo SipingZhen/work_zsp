@@ -143,24 +143,34 @@ class UserController {
   void setDefaults(const double* values) {
     for (int i = 0; i < actionsSize_; ++i) defaultJointAngles_(i) = values[i];
   }
-  void setScales(double scalex_value, double scaley_value, double lin_vel,
-                 double ang_vel, double dof_pos, double dof_vel) {
-    scalex = scalex_value;
-    scaley = scaley_value;
+  void setScales(double lin_vel, double ang_vel, double dof_pos, double dof_vel) {
     robotconfig.obsScales = {lin_vel, ang_vel, dof_pos, dof_vel};
   }
   void setCommandConfig(const double* values) {
     defaultMinX_ = values[0];
     defaultMaxX_ = values[1];
-    defaultXFilterStep_ = values[2];
-    defaultYawFilterStep_ = values[3];
-    walkMinX_ = values[4];
-    walkMaxX_ = values[5];
-    runMinX_ = values[6];
-    runMaxX_ = values[7];
-    runMinAbsX_ = values[8];
-    runYawDeadzone_ = values[9];
-    runXFilterStep_ = values[10];
+    defaultMinY_ = values[2];
+    defaultMaxY_ = values[3];
+    defaultMinYaw_ = values[4];
+    defaultMaxYaw_ = values[5];
+    defaultXDeadzone_ = values[6];
+    defaultXFilterStep_ = values[7];
+    defaultYawFilterStep_ = values[8];
+    walkMinX_ = values[9];
+    walkMaxX_ = values[10];
+    walkMinY_ = values[11];
+    walkMaxY_ = values[12];
+    walkMinYaw_ = values[13];
+    walkMaxYaw_ = values[14];
+    runMinX_ = values[15];
+    runMaxX_ = values[16];
+    runMinY_ = values[17];
+    runMaxY_ = values[18];
+    runMinYaw_ = values[19];
+    runMaxYaw_ = values[20];
+    runXDeadzone_ = values[21];
+    runYawDeadzone_ = values[22];
+    runXFilterStep_ = values[23];
   }
   void configureWalk(const int* motor_to_policy, const double* defaults, const double* scales) {
     for (int i = 0; i < 18; ++i) {
@@ -252,7 +262,6 @@ class UserController {
 
  private:
   int actionsSize_, observationSize_, stackSize_;
-  double scalex = 1, scaley = 1;
   bool first_ = true;
   bool* isfirstRecObs_ = &first_;
   RobotCfg robotconfig;
@@ -260,11 +269,24 @@ class UserController {
   vector_t lastActions_, defaultJointAngles_, command_;
   scalar_t defaultMinX_{};
   scalar_t defaultMaxX_{};
+  scalar_t defaultMinY_{};
+  scalar_t defaultMaxY_{};
+  scalar_t defaultMinYaw_{};
+  scalar_t defaultMaxYaw_{};
+  scalar_t defaultXDeadzone_{};
   scalar_t walkMinX_{};
   scalar_t walkMaxX_{};
+  scalar_t walkMinY_{};
+  scalar_t walkMaxY_{};
+  scalar_t walkMinYaw_{};
+  scalar_t walkMaxYaw_{};
   scalar_t runMinX_{};
   scalar_t runMaxX_{};
-  scalar_t runMinAbsX_{};
+  scalar_t runMinY_{};
+  scalar_t runMaxY_{};
+  scalar_t runMinYaw_{};
+  scalar_t runMaxYaw_{};
+  scalar_t runXDeadzone_{};
   scalar_t runYawDeadzone_{};
   scalar_t defaultXFilterStep_{};
   scalar_t defaultYawFilterStep_{};
@@ -301,11 +323,11 @@ void sim_command_observation_configure(void* handle, const double* values) {
 }
 
 void* sim_observation_create(int actions_size, int observation_size, int stack_size,
-                             const double* defaults, double scalex, double scaley,
-                             double lin_vel, double ang_vel, double dof_pos, double dof_vel) {
+                             const double* defaults, double lin_vel, double ang_vel,
+                             double dof_pos, double dof_vel) {
   auto* controller = new legged::UserController(actions_size, observation_size, stack_size);
   controller->setDefaults(defaults);
-  controller->setScales(scalex, scaley, lin_vel, ang_vel, dof_pos, dof_vel);
+  controller->setScales(lin_vel, ang_vel, dof_pos, dof_vel);
   return controller;
 }
 
