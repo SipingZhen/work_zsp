@@ -1003,7 +1003,8 @@ namespace legged {
     constexpr int historyFrames = 5;
 
     vector_t command(3);
-    command(0) = std::max(-0.6, std::max(-1.0, std::min(1.0, command_[0])) * walkConfig_.scalex) * walkConfig_.linVel;
+    command(0) = std::max(walkMinX_, std::min(walkMaxX_,
+        std::max(-1.0, std::min(1.0, command_[0])) * walkConfig_.scalex * walkConfig_.linVel));
     command(1) = command_[1] * walkConfig_.scaley * walkConfig_.linVel;
     command(2) = command_[2] * walkConfig_.angVel;
 
@@ -1053,9 +1054,16 @@ namespace legged {
     constexpr int historyFrames = 5;
 
     vector_t command(3);
-    command(0) = std::max(-0.6, std::max(-1.0, std::min(1.0, command_[0])) * runConfig_.scalex) * runConfig_.linVel;
+    if (runHistoryFirst_) runLimitedX_ = 0.0;
+    scalar_t targetX = std::max(runMinX_, std::min(runMaxX_,
+        std::max(-1.0, std::min(1.0, command_[0])) * runConfig_.scalex * runConfig_.linVel));
+    // Keep neutral at zero; nonzero commands have at least 0.3 magnitude.
+    if (targetX > 0.0) targetX = std::max(runMinAbsX_, targetX);
+    else if (targetX < 0.0) targetX = std::min(-runMinAbsX_, targetX);
+    runLimitedX_ += std::max(-runXFilterStep_, std::min(runXFilterStep_, targetX - runLimitedX_));
+    command(0) = runLimitedX_;
     command(1) = command_[1] * runConfig_.scaley * runConfig_.linVel;
-    command(2) = command_[2] * runConfig_.angVel;
+    command(2) = (std::abs(command_[2]) < runYawDeadzone_ ? 0.0 : command_[2]) * runConfig_.angVel;
 
     vector_t jointPosObs(18);
     vector_t jointVelObs(18);
@@ -1252,17 +1260,23 @@ namespace legged {
     comm_y = command_[1] * scaley;
 
     // Apply a dead zone to the target, then limit each policy-frame change.
-    static scalar_t limitedX = 0.0;
-    if (firstObservation) limitedX = 0.0;
-    scalar_t targetX = std::max(-0.6, static_cast<scalar_t>(comm_x)) * obsScales.linVel;
+    if (firstObservation)
+    {
+      defaultLimitedX_ = 0.0;
+      defaultLimitedYaw_ = 0.0;
+    }
+    scalar_t targetX = std::max(defaultMinX_, std::min(defaultMaxX_,
+        static_cast<scalar_t>(comm_x) * obsScales.linVel));
     if (std::abs(targetX) < 0.3) targetX = 0.0;
-    const scalar_t deltaX = std::max(-0.05, std::min(0.05, targetX - limitedX));
-    limitedX += deltaX;
+    const scalar_t deltaX = std::max(-defaultXFilterStep_, std::min(defaultXFilterStep_, targetX - defaultLimitedX_));
+    defaultLimitedX_ += deltaX;
 
-    command[0] = limitedX;
+    command[0] = defaultLimitedX_;
     command[1] = comm_y * obsScales.linVel;
-    command[2] = command_[2] * obsScales.angVel;
-    if (std::abs(command[0]) > 0.3) command[2] *= 0.6;
+    scalar_t targetYaw = command_[2] * obsScales.angVel;
+    if (std::abs(command[0]) > 0.3) targetYaw *= 0.6;
+    defaultLimitedYaw_ += std::max(-defaultYawFilterStep_, std::min(defaultYawFilterStep_, targetYaw - defaultLimitedYaw_));
+    command[2] = defaultLimitedYaw_;
 
 
     
