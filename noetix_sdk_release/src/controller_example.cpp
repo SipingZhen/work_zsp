@@ -24,18 +24,25 @@ int main()
   }
   const YAML::Node policyConfig = YAML::LoadFile(path+"/config/policy.yaml");
   #ifdef RK3588
-    const std::string configuredPolicyPath = policyConfig["default"]["rknn"].as<std::string>();
+    const char* policyFormat = "rknn";
   #else
-    const std::string configuredPolicyPath = policyConfig["default"]["onnx"].as<std::string>();
+    const char* policyFormat = "onnx";
   #endif
-  if (configuredPolicyPath.empty()) return 1;
-  const std::string defaultPolicyPath = configuredPolicyPath.front() == '/'
-      ? configuredPolicyPath : path+"/"+configuredPolicyPath;
-  #ifdef RK3588
-    ret = usercontroller.loadrknnmodel(defaultPolicyPath);
-  #else
-    ret = usercontroller.loadModel(defaultPolicyPath);
-  #endif
+  std::vector<std::string> policyPaths;
+  const auto addPolicy = [&](const YAML::Node& entry) {
+    const std::string configuredPath = entry[policyFormat].as<std::string>();
+    if (configuredPath.empty()) return false;
+    policyPaths.push_back(configuredPath.front() == '/' ? configuredPath : path+"/"+configuredPath);
+    return true;
+  };
+  if (!addPolicy(policyConfig["default"])) return 1;
+  if (policyConfig["alternates"])
+  {
+    if (!policyConfig["alternates"].IsSequence()) return 1;
+    for (const auto& entry : policyConfig["alternates"])
+      if (!addPolicy(entry)) return 1;
+  }
+  ret = usercontroller.loadDefaultPolicies(policyPaths);
   if (!ret) return 1;
   if (!usercontroller.loadWalkModel(path+"/policy")) return 1;
   if (!usercontroller.loadRunModel(path+"/policy")) return 1;

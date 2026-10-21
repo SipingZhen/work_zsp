@@ -4,7 +4,9 @@
 
 ## 与当前 N2 训练策略对齐
 
-`noetix_sdk_release/policy/policy.onnx` 是 4+2 选择的默认策略，其 ONNX 和 RKNN 路径在 `config/policy.yaml` 中配置，输入是 5 帧 × 62 维（310 维），输出是 18 维动作，控制频率为 50 Hz。部署观测依次为速度指令 3、机体角速度 3、roll/pitch 2、相对默认关节角 18、关节速度 18、上一帧动作 18；关节按 `config/ning_user.yaml` 中的 `policy_joint_order` 排列，动作按每个关节的 `action_scale` 执行。`policy_walk.onnx` 由 4+3 选择，输入为 5 帧 × 39 维，使用机体系投影重力和左右腿各 5 个关节，输出 10 个腿关节动作。`policy_run.onnx` 在仿真中由 4+0 选择，实机使用逻辑键 2+8，输入为 5 帧 × 63 维（315 维），使用机体系投影重力和全部 18 个关节，输出 18 个动作。walk 和 run 的观测缩放、默认角度、PD 参数及动作缩放分别来自 `config/ning_ac.yaml` 的对应配置，在 ARM 控制器上通过 ONNX Runtime 运行。切换策略时，5 帧历史均填入当前观测。
+`noetix_sdk_release/policy/policy.onnx` 是首次单按物理键 2 进入的默认策略，其 ONNX 和 RKNN 路径在 `config/policy.yaml` 中配置，输入是 5 帧 × 62 维（310 维），输出是 18 维动作，控制频率为 50 Hz。部署观测依次为速度指令 3、机体角速度 3、roll/pitch 2、相对默认关节角 18、关节速度 18、上一帧动作 18；关节按 `config/ning_user.yaml` 中的 `policy_joint_order` 排列，动作按每个关节的 `action_scale` 执行。`policy_walk.onnx` 由 4+3 选择，输入为 5 帧 × 39 维，使用机体系投影重力和左右腿各 5 个关节，输出 10 个腿关节动作。`policy_run.onnx` 在仿真中由 4+0 选择，实机使用逻辑键 2+8，输入为 5 帧 × 63 维（315 维），使用机体系投影重力和全部 18 个关节，输出 18 个动作。walk 和 run 的观测缩放、默认角度、PD 参数及动作缩放分别来自 `config/ning_ac.yaml` 的对应配置，在 ARM 控制器上通过 ONNX Runtime 运行。切换策略时，5 帧历史均填入当前观测。
+
+`config/policy.yaml` 的 `default` 是首个默认策略，`alternates` 可按顺序添加同类策略的 ONNX 和 RKNN 路径。站立后单按物理键 2 进入首个默认策略；在默认策略运行时，每次再按 2 就轮换到下一个，末尾回到首个。Walk 和 Run 的按键不变。每个模型都必须与默认策略的观测、动作维度和关节配置一致；RK3588 上机前需为每项生成对应的 RKNN 文件，例如 `python onnx2rknn/onnx2rknn.py --onnx noetix_sdk_release/policy/policy-275.onnx --output noetix_sdk_release/policy/policy-275.rknn`。
 
 run 模型没有关节顺序元数据；当前实现按来源分支 SDK 的电机顺序排列 run 的关节观测和动作：左臂 4、左腿 5、右臂 4、右腿 5。仿真会在此顺序与 `ning_user.yaml` 的关节顺序之间转换。
 

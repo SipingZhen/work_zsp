@@ -471,6 +471,12 @@ namespace legged
   void UserController::onnxdatainit()
   {
     Ort::AllocatorWithDefaultOptions allocator;
+    policyInputNames_.clear();
+    policyOutputNames_.clear();
+    policyInputNodeNameAllocatedStrings.clear();
+    policyOutputNodeNameAllocatedStrings.clear();
+    policyInputShapes_.clear();
+    policyOutputShapes_.clear();
    // ROS_INFO_STREAM("count: " << poliycfg->policySessionPtr->GetOutputCount());
     for (int i = 0; i < policySessionPtr->GetInputCount(); i++)
     {
@@ -523,6 +529,7 @@ namespace legged
     int ret = 0;
     policyFilePath = modle_path;
     unsigned char* model_data=load_model(policyFilePath.c_str(),&model_data_size);
+    if (model_data == nullptr) return false;
     ret = rknn_init(&ctx,model_data,model_data_size,0,NULL);
     if(ret <0)
     {
@@ -654,6 +661,46 @@ namespace legged
     }
 
     printf("Load Onnx run model successfully !!!\n");
+    return true;
+  }
+
+  bool UserController::loadDefaultPolicies(const std::vector<std::string>& modelpaths)
+  {
+    if (modelpaths.empty()) return false;
+    defaultPolicyPaths_ = modelpaths;
+    defaultPolicyIndex_ = 0;
+#ifdef RK3588
+    for (const auto& path : modelpaths)
+    {
+      if (!loadrknnmodel(path)) return false;
+      defaultContexts_.push_back(ctx);
+    }
+    ctx = defaultContexts_.front();
+#else
+    if (!loadModel(modelpaths.front())) return false;
+    defaultSessions_.resize(modelpaths.size());
+    for (size_t i = 1; i < modelpaths.size(); ++i)
+    {
+      Ort::SessionOptions options;
+      options.SetInterOpNumThreads(1);
+      auto session = std::make_unique<Ort::Session>(*onnxEnvPrt_, modelpaths[i].c_str(), options);
+      if (session->GetInputCount() != 1 || session->GetOutputCount() != 1)
+      {
+        printf("Incompatible default policy: %s\n", modelpaths[i].c_str());
+        return false;
+      }
+      const auto input = session->GetInputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape();
+      const auto output = session->GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo().GetShape();
+      if ((input != std::vector<int64_t>{1, observationSize_ * stackSize_} &&
+           input != std::vector<int64_t>{1, stackSize_, observationSize_}) ||
+          output != std::vector<int64_t>{1, actionsSize_})
+      {
+        printf("Incompatible default policy: %s\n", modelpaths[i].c_str());
+        return false;
+      }
+      defaultSessions_[i] = std::move(session);
+    }
+#endif
     return true;
   }
 
@@ -1195,11 +1242,26 @@ namespace legged {
       }
     }else if(remote_data.button[10] == 0)
       keyflag[10] =0;
-    if((remote_data.button[5] == 1)&&(remote_data.button[2] == 1)&&(keyflag[5] == 0))
+    if((remote_data.button[5] == 1)&&(keyflag[5] == 0))
     {
-
+      keyflag[5] = 1;
       if(mode_ == WorkMode::STAND || mode_ == WorkMode::USERWALK)
       {
+#ifndef NOETIX_SIM_OBS
+        if (mode_ == WorkMode::USERWALK && activePolicy_ == PolicyKind::DEFAULT &&
+            defaultPolicyPaths_.size() > 1)
+        {
+          const size_t next = (defaultPolicyIndex_ + 1) % defaultPolicyPaths_.size();
+#ifdef RK3588
+          ctx = defaultContexts_[next];
+#else
+          defaultSessions_[defaultPolicyIndex_] = std::move(policySessionPtr);
+          policySessionPtr = std::move(defaultSessions_[next]);
+          onnxdatainit();
+#endif
+          defaultPolicyIndex_ = next;
+        }
+#endif
         standPercent = 0;
         isChangeMode_ = true;
         lastActions_.setZero();
@@ -1211,8 +1273,11 @@ namespace legged {
         walkHistoryFirst_ = true;
         runHistoryFirst_ = true;
         mode_ = WorkMode::USERWALK;
-        keyflag[5] =1;
+#ifdef NOETIX_SIM_OBS
         printf("TO DEFAULT POLICY\n");
+#else
+        printf("TO DEFAULT POLICY: %s\n", defaultPolicyPaths_[defaultPolicyIndex_].c_str());
+#endif
       }
 
     }else if(remote_data.button[5] == 0)

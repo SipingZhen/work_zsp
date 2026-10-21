@@ -109,6 +109,7 @@ public:
     }
     bool init(ControlMode mode );
     bool loadModel(std::string modelpath);// override ;
+    bool loadDefaultPolicies(const std::vector<std::string>& modelpaths);
     bool loadWalkModel(const std::string& modelpath);
     bool loadRunModel(const std::string& modelpath);
     bool loadrknnmodel(std::string modle_path);
@@ -166,6 +167,9 @@ public:
     int64_t count;
     RobotCfg robotconfig;
     std::unique_ptr<Ort::Session> policySessionPtr;
+    std::vector<std::unique_ptr<Ort::Session>> defaultSessions_;
+    std::vector<std::string> defaultPolicyPaths_;
+    size_t defaultPolicyIndex_ = 0;
     std::unique_ptr<Ort::Session> walkSessionPtr_;
     std::string walkInputName_;
     std::string walkOutputName_;
@@ -282,6 +286,7 @@ public:
     vector_t standJointAngles_;
     #ifdef RK3588
     rknn_context ctx =0;
+    std::vector<rknn_context> defaultContexts_;
     std::vector<rknn_tensor_attr> input_attrs;
     std::vector<rknn_tensor_attr> output_attrs;
     rknn_input_output_num io_num;

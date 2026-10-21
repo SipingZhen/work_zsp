@@ -1,3 +1,8 @@
 default:
   onnx: policy/policy.onnx
   rknn: policy/policy.rknn
+alternates:
+  - onnx: policy/policy-275.onnx
+    rknn: policy/policy-275.rknn
+  - onnx: policy/policy345.onnx
+    rknn: policy/policy345.rknn

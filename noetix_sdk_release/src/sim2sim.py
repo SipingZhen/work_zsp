@@ -477,7 +477,7 @@ def simulate(args):
         button_map.update(joystick_button_map(args.joystick_button_map))
         print(f"joystick: {args.joystick_device}; enable {button_map[9]}, "
               f"stand {button_map[2]}+{button_map[10]}, "
-              f"policy {button_map[2]}+{button_map[5]}, "
+              f"policy {button_map[5]}, "
               f"walk policy {button_map[2]}+{button_map[6]}, "
               f"run policy {button_map[2]}+{button_map[8]}", flush=True)
         print(f"joystick axes: x={args.joystick_forward_sign}*axis{args.joystick_forward_axis}, "
