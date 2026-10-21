@@ -23,14 +23,9 @@ int main()
     return 0;
   }
   const YAML::Node policyConfig = YAML::LoadFile(path+"/config/policy.yaml");
-  #ifdef RK3588
-    const char* policyFormat = "rknn";
-  #else
-    const char* policyFormat = "onnx";
-  #endif
   std::vector<std::string> policyPaths;
   const auto addPolicy = [&](const YAML::Node& entry) {
-    const std::string configuredPath = entry[policyFormat].as<std::string>();
+    const std::string configuredPath = entry["onnx"].as<std::string>();
     if (configuredPath.empty()) return false;
     policyPaths.push_back(configuredPath.front() == '/' ? configuredPath : path+"/"+configuredPath);
     return true;
@@ -56,18 +51,11 @@ int main()
     
     return 0;
   }
-  #ifdef RK3588
-  ret = controller_base.loadModel("walk",path+"/policy","rknn");
-  ret = controller_base.loadModel("run",path+"/policy","rknn");
-  ret = controller_base.loadModel("ygdance",path+"/policy","rknn");
-
-  #else
   ret = controller_base.loadModel("walk",path+"/policy","onnx");
   ret = controller_base.loadModel("run",path+"/policy","onnx");
   ret = controller_base.loadModel("ygdance",path+"/policy","onnx");
   
   
-  #endif
   printf("loadModel ret %d\n",ret);
   controller_base.start();
   #endif

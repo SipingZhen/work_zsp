@@ -365,16 +365,6 @@ namespace legged
     Command  cmd;
     
     remote_data =controllerbase.get_jsdata();
-#if 1  // Set to 0 to disable button-number logging.
-    static bool previousButtons[14] = {};
-    for (int i = 0; i < 14; ++i)
-    {
-      const bool pressed = remote_data.button[i] != 0;
-      if (pressed && !previousButtons[i])
-        printf("Remote button pressed: %d\n", i);
-      previousButtons[i] = pressed;
-    }
-#endif
     double remoteCommand[3];
     readRemoteCommand(remoteCommand);
     cmd.x = remoteCommand[0];
@@ -427,11 +417,7 @@ namespace legged
       else
       {
         computeObservation();
-        #ifdef RK3588
-        computeActionsrknn();
-        #else
         computeActions();
-        #endif
       }
       // limit action range
       const scalar_t clip = activePolicy_ == PolicyKind::WALK ? walkConfig_.clipActions
@@ -477,25 +463,12 @@ namespace legged
     policyOutputNodeNameAllocatedStrings.clear();
     policyInputShapes_.clear();
     policyOutputShapes_.clear();
-   // ROS_INFO_STREAM("count: " << poliycfg->policySessionPtr->GetOutputCount());
     for (int i = 0; i < policySessionPtr->GetInputCount(); i++)
     {
       auto policyInputnamePtr = policySessionPtr->GetInputNameAllocated(i, allocator);
       policyInputNodeNameAllocatedStrings.push_back(std::move(policyInputnamePtr));
       policyInputNames_.push_back(policyInputNodeNameAllocatedStrings.back().get());
-      // inputNames_.push_back(sessionPtr_->GetInputNameAllocated(i, allocator).get());
       policyInputShapes_.push_back(policySessionPtr->GetInputTypeInfo(i).GetTensorTypeAndShapeInfo().GetShape());
-      std::vector<int64_t> policyShape = policySessionPtr->GetInputTypeInfo(i).GetTensorTypeAndShapeInfo().GetShape();
-      std::cerr << "Policy Shape: [";
-      for (size_t j = 0; j < policyShape.size(); ++j)
-      {
-          std::cout << policyShape[j];
-          if (j != policyShape.size() - 1)
-          {
-              std::cerr << ", ";
-          }
-      }
-      std::cout << "]" << std::endl;
     }
     
     for (int i = 0; i < policySessionPtr->GetOutputCount(); i++)
@@ -503,20 +476,7 @@ namespace legged
       auto policyOutputnamePtr = policySessionPtr->GetOutputNameAllocated(i, allocator);
       policyOutputNodeNameAllocatedStrings.push_back(std::move(policyOutputnamePtr));
       policyOutputNames_.push_back(policyOutputNodeNameAllocatedStrings.back().get());
-      // outputNames_.push_back(sessionPtr_->GetOutputNameAllocated(i, allocator).get());
-      std::cout << policySessionPtr->GetOutputNameAllocated(i, allocator).get() << std::endl;
       policyOutputShapes_.push_back(policySessionPtr->GetOutputTypeInfo(i).GetTensorTypeAndShapeInfo().GetShape());
-      std::vector<int64_t> policyShape = policySessionPtr->GetOutputTypeInfo(i).GetTensorTypeAndShapeInfo().GetShape();
-      std::cerr << "Policy Shape: [";
-      for (size_t j = 0; j < policyShape.size(); ++j)
-      {
-          std::cout << policyShape[j];
-          if (j != policyShape.size() - 1)
-          {
-              std::cerr << ", ";
-          }
-      }
-      std::cout << "]" << std::endl;
     }
     
 
@@ -669,14 +629,6 @@ namespace legged
     if (modelpaths.empty()) return false;
     defaultPolicyPaths_ = modelpaths;
     defaultPolicyIndex_ = 0;
-#ifdef RK3588
-    for (const auto& path : modelpaths)
-    {
-      if (!loadrknnmodel(path)) return false;
-      defaultContexts_.push_back(ctx);
-    }
-    ctx = defaultContexts_.front();
-#else
     if (!loadModel(modelpaths.front())) return false;
     defaultSessions_.resize(modelpaths.size());
     for (size_t i = 1; i < modelpaths.size(); ++i)
@@ -700,7 +652,6 @@ namespace legged
       }
       defaultSessions_[i] = std::move(session);
     }
-#endif
     return true;
   }
 
@@ -1051,23 +1002,13 @@ namespace legged
   }
   void UserController::computeActions()
   {
-    std::cout << "******************onxx****************" << std::endl;
     std::vector<Ort::Value> policyInputValues;
     policyInputValues.push_back(Ort::Value::CreateTensor<tensor_element_t>(memoryInfo, policyObservations_.data(),policyObservations_.size(),
                                                                           policyInputShapes_[0].data(), policyInputShapes_[0].size()));
      // run inference
     Ort::RunOptions runOptions;
     std::vector<Ort::Value> outputValues = policySessionPtr->Run(runOptions, policyInputNames_.data(), policyInputValues.data(), 1, policyOutputNames_.data(), 1);
-    if (isfirstCompAct_)
-    {
-      for (int i = 0; i < policyObservations_.size(); ++i) {
-        std::cout << policyObservations_[i] << " ";
-        if ((i + 1) % observationSize_ == 0) {
-            std::cout << std::endl;
-        }
-      }
-      isfirstCompAct_ = false;
-    }
+    isfirstCompAct_ = false;
 
     for (int i = 0; i < actionsSize_; i++)
     {
@@ -1209,14 +1150,12 @@ namespace legged {
         standPercent = 0;
         mode_ = WorkMode::LIE;
         keyflag[9] =1;
-        printf("TO LIE MODE\n");
 
       }else
       {
           startcontrol = false;
           mode_ = WorkMode::DEFAULT;
           keyflag[9] =1;
-          printf("stop control\n");
       }
 
     }else if(remote_data.button[9] == 0)
@@ -1230,13 +1169,11 @@ namespace legged {
         {
           standPercent = 0;
           mode_ = WorkMode::STAND;
-          printf("LIE2STAND\n");
         }
         else if (mode_ == WorkMode::STAND)
         {
           standPercent = 0;
           mode_ = WorkMode::LIE;
-          printf("STAND2LIE\n");
         }
 
       }
@@ -1252,13 +1189,9 @@ namespace legged {
             defaultPolicyPaths_.size() > 1)
         {
           const size_t next = (defaultPolicyIndex_ + 1) % defaultPolicyPaths_.size();
-#ifdef RK3588
-          ctx = defaultContexts_[next];
-#else
           defaultSessions_[defaultPolicyIndex_] = std::move(policySessionPtr);
           policySessionPtr = std::move(defaultSessions_[next]);
           onnxdatainit();
-#endif
           defaultPolicyIndex_ = next;
         }
 #endif
@@ -1273,11 +1206,6 @@ namespace legged {
         walkHistoryFirst_ = true;
         runHistoryFirst_ = true;
         mode_ = WorkMode::USERWALK;
-#ifdef NOETIX_SIM_OBS
-        printf("TO DEFAULT POLICY\n");
-#else
-        printf("TO DEFAULT POLICY: %s\n", defaultPolicyPaths_[defaultPolicyIndex_].c_str());
-#endif
       }
 
     }else if(remote_data.button[5] == 0)
@@ -1298,7 +1226,6 @@ namespace legged {
         walkHistoryFirst_ = true;
         runHistoryFirst_ = true;
         mode_ = WorkMode::USERWALK;
-        printf("TO WALK POLICY\n");
       }
     }else if(remote_data.button[6] == 0)
       keyflag[6] = 0;
@@ -1318,7 +1245,6 @@ namespace legged {
         walkHistoryFirst_ = true;
         runHistoryFirst_ = true;
         mode_ = WorkMode::USERWALK;
-        printf("TO RUN POLICY\n");
       }
     }else if(remote_data.button[8] == 0)
       keyflag[8] = 0;
@@ -1329,12 +1255,10 @@ namespace legged {
       {
         isChangeMode_ = true;
         mode_ = WorkMode::STAND;
-        printf("WALK2STAND\n");
 
       }else if (mode_ == WorkMode::DEFAULT)
       {
         standPercent = 0;
-        printf("deftolie\n");
         isChangeMode_ = true;
         mode_ = WorkMode::LIE;
 

@@ -29,6 +29,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm.*|arm|aarch64")
     set(LIB_DIR ${PROJECT_SOURCE_DIR}/lib/aarch64)
+    # The prebuilt SDK still refers to RKNN symbols; policy inference uses ONNX Runtime.
+    set(RKNN_COMPAT_LIBRARY
+        "${PROJECT_SOURCE_DIR}/../rknpu2v2.1.0/runtime/Linux/librknn_api/aarch64/librknnrt.so")
+    if(NOT EXISTS "${RKNN_COMPAT_LIBRARY}")
+      unset(RKNN_COMPAT_LIBRARY)
+      find_library(RKNN_COMPAT_LIBRARY NAMES rknnrt)
+    endif()
+    if(NOT RKNN_COMPAT_LIBRARY OR NOT EXISTS "${RKNN_COMPAT_LIBRARY}")
+      message(FATAL_ERROR "ARM64 SDK requires librknnrt.so for linking; install it or keep the bundled rknpu2v2.1.0 directory")
+    endif()
 
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64)|(AMD64)|(^i686)")
     set(LIB_DIR ${PROJECT_SOURCE_DIR}/lib/x86_64)
@@ -55,7 +65,12 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm.*|arm|aarch64")
       onnxruntime
       Threads::Threads
       spdlog::spdlog
+      ${RKNN_COMPAT_LIBRARY}
   )
+  set_target_properties(noetix_joint_controller PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+  add_custom_command(TARGET noetix_joint_controller POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${RKNN_COMPAT_LIBRARY}" "$<TARGET_FILE_DIR:noetix_joint_controller>/librknnrt.so")
 else()
   target_link_libraries(noetix_joint_controller 
       PRIVATE pybind11::module 

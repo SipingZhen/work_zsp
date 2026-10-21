@@ -114,6 +114,8 @@ chmod +x build_release.sh
 ./build_release.sh
 ```
 
+x86_64 和 ARM64 的默认、walk、run 策略均由 ONNX Runtime 推理。ARM64 随附的预编译 `librlcontrol.a` 仍有 RKNN 链接符号，因此构建时会链接仓库中的 `librknnrt.so` 并将它复制到控制器可执行文件旁；本项目的 `UserController` 不会加载 `.rknn` 模型或调用 RKNN 推理路径。部署时请同时保留可执行文件旁的 `librknnrt.so`。
+
 ### 配置说明
 
 #### 修改机器人参数
