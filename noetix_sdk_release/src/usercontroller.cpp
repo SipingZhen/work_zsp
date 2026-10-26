@@ -373,6 +373,17 @@ namespace legged
     
     updateRemoteMode();
 
+    const auto imu = controllerbase.get_imu_data();
+    const quaternion_t orientation(imu.ori[3], imu.ori[0], imu.ori[1], imu.ori[2]);
+    // The body Z axis must stay within 45 degrees of vertical.
+    if (orientation.normalized().toRotationMatrix()(2, 2) < std::cos(M_PI / 4))
+    {
+      if (mode_ != WorkMode::DEFAULT)
+        printf("Fall protection: tilt exceeds 45 degrees, disabling control\n");
+      startcontrol = false;
+      mode_ = WorkMode::DEFAULT;
+    }
+
     switch (mode_)
     {
       case WorkMode::STAND:
