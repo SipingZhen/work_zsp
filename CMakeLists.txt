@@ -29,9 +29,9 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86_64)|(AMD64)|(^i686)")
         set(DDS_LIB_DIR ${CMAKE_SOURCE_DIR}/dds/x86_64/lib)
 endif()
 
-find_package(onnxruntime REQUIRED)
+option(BUILD_CPP_EXAMPLES "Build the C++ examples" ON)
+
 find_package(Eigen3 REQUIRED)
-find_package(Threads REQUIRED)
 find_package(pybind11 REQUIRED)
 
 pybind11_add_module(highcontrol_py pybind/highcontrol_pybind.cpp)
@@ -66,25 +66,30 @@ add_compile_definitions(SDK_ROOT="${CMAKE_BINARY_DIR}/..")
 include_directories(${EIGEN3_INCLUDE_DIRS})
 
 
-add_executable(example_high examples/cpp/example_high.cpp)
-add_executable(example_low examples/cpp/example_low.cpp)
+if(BUILD_CPP_EXAMPLES)
+        find_package(Threads REQUIRED)
+        find_package(onnxruntime REQUIRED)
 
-target_include_directories(example_high
-        PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-target_include_directories(example_low
-        PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+        add_executable(example_high examples/cpp/example_high.cpp)
+        add_executable(example_low examples/cpp/example_low.cpp)
 
-target_link_libraries(example_high
-        Threads::Threads 
-        noetix_n2_sdk
-        ${DDS_LIB_DIR}/libddsc.so
-        ${DDS_LIB_DIR}/libddscxx.so
-)
-target_link_libraries(example_low
-        Threads::Threads
-        onnxruntime
-        noetix_n2_sdk
-        yaml-cpp
-        ${DDS_LIB_DIR}/libddsc.so
-        ${DDS_LIB_DIR}/libddscxx.so
-)
+        target_include_directories(example_high
+                PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+        target_include_directories(example_low
+                PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+
+        target_link_libraries(example_high
+                Threads::Threads
+                noetix_n2_sdk
+                ${DDS_LIB_DIR}/libddsc.so
+                ${DDS_LIB_DIR}/libddscxx.so
+        )
+        target_link_libraries(example_low
+                Threads::Threads
+                onnxruntime
+                noetix_n2_sdk
+                yaml-cpp
+                ${DDS_LIB_DIR}/libddsc.so
+                ${DDS_LIB_DIR}/libddscxx.so
+        )
+endif()

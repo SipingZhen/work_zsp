@@ -88,7 +88,8 @@ PYBIND11_MODULE(lowcontrol_py, m) {
                         py::return_value_policy::reference)
 
             // 初始化
-            .def("init", &LowController::init)
+            .def("init", &LowController::init,
+                 py::call_guard<py::gil_scoped_release>())
 
             // 设置电机命令
             .def(
