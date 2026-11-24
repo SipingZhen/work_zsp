@@ -30,7 +30,7 @@ def projected_gravity(quat_xyzw):
 class DepthPolicy:
     def __init__(self, path):
         options = ort.SessionOptions()
-        options.intra_op_num_threads = 1
+        options.intra_op_num_threads = 2
         self.session = ort.InferenceSession(
             str(path), options, providers=["CPUExecutionProvider"],
         )
