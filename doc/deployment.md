@@ -50,7 +50,9 @@ flowchart LR
 
 按键 `9` 在默认模式与受控模式之间切换，启用后先进入 `LIE`。`10 + 2` 从趴下或步态切到站立。站立过渡完成且有新鲜深度帧时，`5 + 2` 启动步态。步态中按 `11` 回到站立，在默认模式按 `11` 可进入趴下。纵向指令取自 `axes[1]`，偏航取自 `axes[0]`，横向置零。模型限制前向速度指令在 `0–1 m/s`、偏航角速度指令在 `−0.6–0.6 rad/s`。
 
-状态超过 `0.2 s` 未更新或关节位置出现非有限值时，控制器进入 `DEFAULT`。步态中深度超过 `0.2 s` 未更新时进入 `STAND`，策略发现四元数、观测或输出异常并抛出 `ValueError` 时也进入 `STAND`。实机处理 `Ctrl+C` 退出时，如果已经收到硬件状态，程序会下发一次默认模式命令并关闭相机。[模式与超时处理](../examples/py/user_controller.py)
+状态超过 `0.2 s` 未更新或关节位置出现非有限值时，控制器进入 `DEFAULT`。步态中深度超过 `0.2 s` 未更新时进入 `STAND`，策略发现观测或输出异常并抛出 `ValueError` 时也进入 `STAND`。实机处理 `Ctrl+C` 退出时，如果已经收到硬件状态，程序会下发一次默认模式命令并关闭相机。[模式与超时处理](../examples/py/user_controller.py)
+
+实机和 MuJoCo 都在每个控制周期检查 IMU。机身 Z 轴偏离竖直超过 `45°`，或 IMU 四元数无效时，控制器立即进入 `DEFAULT`，关节只保留 `kd = 0.1` 的低阻尼。扶正后松开并重新按启动键，恢复趴下、站立和步态的操作流程。[摔倒保护](../examples/py/user_controller.py)
 
 ### 相机线程和深度预处理
 
@@ -118,6 +120,8 @@ python examples/py/sim2sim.py --joystick --terrain stairs --step-height 0.10
 ```
 
 MuJoCo 使用 `him_n2_sim` 的 N2 模型和网格。模拟 IMU、关节位置和速度进入同一个 `UserController`，电机适配层把共用的 `MotorCmd` 转成受 MJCF 力矩范围约束的 PD 力矩。深度相机根据 ONNX 里的内外参对地形投射射线，输出光轴方向的米制深度，按模型相机周期约 `60 Hz` 更新。控制循环仍按 `50 Hz` 采样深度历史。[N2 模型](../simulation/mjcf/N2.xml) · [仿真适配层](../examples/py/sim2sim.py) · [MuJoCo 射线接口](https://mujoco.readthedocs.io/en/latest/APIreference/APIfunctions.html#ray-casting)
+
+MuJoCo 窗口默认在地形上显示深度命中点。进入步态后，点位来自最近一次推理输入的最新深度帧，点的颜色从蓝到红、大小从小到大，对应当前帧从低到高的空间注意力。进入步态前显示蓝色深度点。只有 `0.3–2.0 m` 内的有效深度参与绘制。窗口使用同一训练检查点导出的 `n2_depth_attention.onnx`，加 `--no-vis-attention` 可隐藏点位。[注意力模型](../policy/n2_depth_attention.onnx) · [绘制代码](../examples/py/sim2sim.py) · [MuJoCo 自定义绘制](https://mujoco.readthedocs.io/en/stable/python.html#passive-viewer)
 
 | 手柄动作 | MuJoCo 的 Linux 物理键 | 实机 DDS 逻辑键 |
 | --- | --- | --- |

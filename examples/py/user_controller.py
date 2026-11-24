@@ -3,10 +3,14 @@ import time
 
 import numpy as np
 
+from depth_policy import projected_gravity
+
 
 MOTOR_PERIOD = 0.002
 STAND_DURATION = 2.0
 STATUS_TIMEOUT = 0.2
+FALL_TILT_DEG = 45
+FALL_GRAVITY_Z_LIMIT = np.float32(-np.cos(np.deg2rad(FALL_TILT_DEG)))
 
 
 class WorkMode(Enum):
@@ -81,6 +85,25 @@ class UserController:
             self.handle_default_mode()
             return
 
+        remote = status.remote_data
+        buttons = remote.button == 1
+        pressed = buttons & ~self.buttons
+        self.buttons = buttons
+
+        # The body's Z axis must stay within the tilt limit to send active commands.
+        disable_reason = None
+        try:
+            if projected_gravity(status.imu_data.ori)[2] > FALL_GRAVITY_Z_LIMIT:
+                disable_reason = f"Fall protection: tilt exceeds {FALL_TILT_DEG} degrees"
+        except ValueError as error:
+            disable_reason = str(error)
+        if disable_reason is not None:
+            if self.mode != WorkMode.DEFAULT:
+                print(disable_reason, flush=True)
+                self.set_mode(WorkMode.DEFAULT, None, now)
+            self.handle_default_mode()
+            return
+
         motors = status.motor_data
         joint_pos = np.array([motor.pos for motor in motors], dtype=np.float32)
         if not np.isfinite(joint_pos).all():
@@ -89,10 +112,6 @@ class UserController:
             self.handle_default_mode()
             return
 
-        remote = status.remote_data
-        buttons = remote.button == 1
-        pressed = buttons & ~self.buttons
-        self.buttons = buttons
         stand_pressed = buttons[2] and buttons[10] and (pressed[2] or pressed[10])
         walk_pressed = buttons[2] and buttons[5] and (pressed[2] or pressed[5])
         if pressed[9]:

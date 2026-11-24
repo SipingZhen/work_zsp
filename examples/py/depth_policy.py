@@ -37,6 +37,9 @@ class DepthPolicy:
         metadata = self.session.get_modelmeta().custom_metadata_map
         self.config = json.loads(metadata["ame_n2_depth"])
         cfg = self.config
+        self.output_names = ["actions", "velocity"]
+        if "attention_token_shape" in cfg:
+            self.output_names.append("attention")
 
         self.to_model = [SDK_JOINT_NAMES.index(name) for name in cfg["joint_names"]]
         self.to_sdk = np.argsort(self.to_model)
@@ -62,6 +65,7 @@ class DepthPolicy:
 
     def reset(self):
         self.first_step = True
+        self.attention = None
         self.last_action.fill(0)
         self.velocity.fill(0)
 
@@ -89,7 +93,7 @@ class DepthPolicy:
             self.depth[:, :-1] = self.depth[:, 1:]
             self.depth[:, -1] = depth_m
 
-        actions, velocity = self.session.run(["actions", "velocity"], {
+        actions, velocity, *attention = self.session.run(self.output_names, {
             "proprio": self.proprio,
             "depth_m": self.depth[:, ::self.depth_stride],
             "velocity_history": self.velocity,
@@ -97,6 +101,7 @@ class DepthPolicy:
         if not np.isfinite(actions).all() or not np.isfinite(velocity).all():
             raise ValueError("Nonfinite policy output")
 
+        self.attention = attention[0] if attention else None
         self.last_action[:] = actions[0]
         self.velocity[:, :-1] = self.velocity[:, 1:]
         self.velocity[:, -1] = velocity

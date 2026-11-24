@@ -18,6 +18,7 @@ from user_controller import MOTOR_PERIOD, STAND_DURATION, UserController, WorkMo
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_XML = ROOT / "simulation/mjcf/N2.xml"
 POLICY_PATH = ROOT / "policy/n2_depth.onnx"
+ATTENTION_POLICY_PATH = ROOT / "policy/n2_depth_attention.onnx"
 DEFAULT_BASE_HEIGHT = 0.67
 
 
@@ -83,6 +84,7 @@ class MujocoDepth(DepthSource):
 
     def reset(self):
         self.latest = None
+        self.hits_world = None
         self.next_frame = self.data.time
 
     def update(self):
@@ -99,8 +101,42 @@ class MujocoDepth(DepthSource):
         )
         depth = self.distances * self.rays[:, 2]
         valid = (depth > 0) & (depth <= self.max_depth)
+        hits = origin + self.distances[:, None] * directions
+        hits[~valid] = np.nan
+        self.hits_world = hits.reshape(*self.shape, 3)
         self.publish(np.where(valid, depth, 0).reshape(self.shape).astype(np.float32))
         self.next_frame += self.period
+
+
+def draw_depth_points(scene, hits_world, depth, attention, token_shape, depth_range):
+    scene.ngeom = 0
+    if depth is None:
+        return
+
+    near, far = depth_range
+    valid = np.isfinite(hits_world).all(axis=-1) & (depth >= near) & (depth <= far) & (depth > 0)
+    points = hits_world[valid]
+    if not len(points):
+        return
+
+    weights = np.zeros(len(points))
+    if attention is not None and np.isfinite(attention).all():
+        grid = attention.reshape(token_shape)
+        rows = np.arange(depth.shape[0]) * grid.shape[0] // depth.shape[0]
+        cols = np.arange(depth.shape[1]) * grid.shape[1] // depth.shape[1]
+        weights = grid[np.ix_(rows, cols)][valid]
+        weights = (weights - weights.min()) / max(weights.max() - weights.min(), 1e-8)
+
+    points[:, 2] += 0.05  # Lift the markers above the surface for visibility.
+    radii = 0.01 * (0.5 + 2.5 * weights)
+    red = np.floor(weights * 7) / 7
+    colors = np.column_stack((red, np.zeros_like(red), 1 - red, np.ones_like(red))).astype(np.float32)
+    identity = np.eye(3).ravel()
+    count = min(len(points), scene.maxgeom)
+    for i in range(count):
+        mujoco.mjv_initGeom(scene.geoms[i], mujoco.mjtGeom.mjGEOM_SPHERE, np.full(3, radii[i]),
+                            points[i], identity, colors[i])
+    scene.ngeom = count
 
 
 class MujocoRobot:
@@ -126,6 +162,7 @@ class MujocoRobot:
         self.support_pose = self.data.qpos[:7].copy()
         self.supported = True
         self.camera.reset()
+        self.depth_sample = None
         self.controller = UserController(self, SimpleNamespace, self.policy, self.camera,
                                          clock=lambda: self.data.time)
         mujoco.mj_forward(self.model, self.data)
@@ -153,7 +190,13 @@ class MujocoRobot:
         self.status.imu_data.angular_vel = data.sensor("angular-velocity").data
         self.status.remote_data = remote
         self.on_status(self.status)
+        previous_attention = self.policy.attention
         self.controller.process()
+        if self.controller.mode != WorkMode.USERWALK:
+            self.depth_sample = None
+        elif self.policy.attention is not previous_attention:
+            # Match the latest depth frame in the inference input, even between camera updates.
+            self.depth_sample = self.camera.hits_world, self.camera.latest_frame(), self.policy.attention
 
         mujoco.mj_step2(self.model, data)
         if self.controller.mode == WorkMode.USERWALK:
@@ -200,6 +243,7 @@ def main():
     parser.add_argument("--step-height", type=float, default=0.10)
     parser.add_argument("--base-height", type=float, default=DEFAULT_BASE_HEIGHT)
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--no-vis-attention", action="store_true", help="Hide the ground depth points")
     parser.add_argument("--duration", type=float, help="Simulation time in seconds")
     input_mode = parser.add_mutually_exclusive_group()
     input_mode.add_argument("--joystick", action="store_true", default=True, help="Use a Linux joystick (default)")
@@ -234,7 +278,8 @@ def main():
             args.joystick_button_map, args.joystick_debug,
         ) if args.joystick else nullcontext(None)
         with source as joystick:
-            policy = DepthPolicy(POLICY_PATH)
+            show_points = not args.headless and not args.no_vis_attention
+            policy = DepthPolicy(ATTENTION_POLICY_PATH if show_points else POLICY_PATH)
             model = load_model(args.xml, args.terrain, args.step_height)
             robot = MujocoRobot(model, policy, args.base_height)
             view = nullcontext(None) if args.headless else passive_viewer(model, robot.data, on_key)
@@ -246,11 +291,17 @@ def main():
 def run(robot, joystick, view, reset, duration, command):
     start = time.monotonic()
     ticks = 0
+    token_shape = robot.policy.config.get("attention_token_shape")
+    depth_range = robot.policy.config["depth_range"]
     with view as viewer:
         if viewer is not None:
             with viewer.lock():
                 viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
                 viewer.cam.trackbodyid = robot.base_id
+                if token_shape is not None:
+                    viewer.cam.distance = 3.0
+                    viewer.cam.azimuth = 135
+                    viewer.cam.elevation = -20
                 viewer.opt.geomgroup[5] = 1
         try:
             while ticks * MOTOR_PERIOD < duration and (viewer is None or viewer.is_running()):
@@ -261,6 +312,9 @@ def run(robot, joystick, view, reset, duration, command):
                     remote = (joystick.poll() if joystick is not None else
                               scripted_remote(robot.data.time, command, robot.policy))
                     robot.step(remote)
+                    if viewer is not None and token_shape is not None and (ticks + 1) % 8 == 0:
+                        sample = robot.depth_sample or (robot.camera.hits_world, robot.camera.latest_frame(), None)
+                        draw_depth_points(viewer.user_scn, *sample, token_shape, depth_range)
                 ticks += 1
                 if viewer is not None and ticks % 8 == 0:
                     viewer.sync()

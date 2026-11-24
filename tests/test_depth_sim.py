@@ -15,12 +15,57 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "examples/py"))
 from depth_policy import DepthPolicy
 from realsense_depth import RealSenseDepth
-from sim2sim import DEFAULT_BASE_HEIGHT, DEFAULT_XML, POLICY_PATH, MujocoDepth, MujocoRobot, load_model
+from sim2sim import (
+    ATTENTION_POLICY_PATH, DEFAULT_BASE_HEIGHT, DEFAULT_XML, POLICY_PATH,
+    MujocoDepth, MujocoRobot, draw_depth_points, load_model,
+)
 from sim_remote import EVENT, LinuxJoystick, button_binding
 from user_controller import MOTOR_PERIOD, STAND_DURATION, WorkMode
 
 
 class DepthSimulationTests(unittest.TestCase):
+    def test_attention_points_use_the_inference_frame(self):
+        policy = DepthPolicy(ATTENTION_POLICY_PATH)
+        baseline = DepthPolicy(POLICY_PATH)
+        robot = MujocoRobot(load_model(DEFAULT_XML, "flat", 0.1), policy, DEFAULT_BASE_HEIGHT)
+        remote = SimpleNamespace(button=np.zeros(14, dtype=bool), axes=np.zeros(2))
+        robot.controller.set_mode(WorkMode.USERWALK, policy.stand_pos, robot.data.time)
+        joint_pos = robot.data.qpos[robot.qpos]
+        joint_vel = robot.data.qvel[robot.qvel]
+        quat = robot.data.sensor("orientation").data[[1, 2, 3, 0]]
+        gyro = robot.data.sensor("angular-velocity").data.copy()
+
+        robot.step(remote)
+        sample = robot.depth_sample
+        hits, depth, attention = sample
+        self.assertIs(hits, robot.camera.hits_world)
+        np.testing.assert_array_equal(depth, policy.depth[0, -1])
+        self.assertEqual(attention.shape, (1, 1, 96))
+        self.assertTrue(np.isfinite(attention).all())
+        target = baseline.step(joint_pos, joint_vel, quat, gyro, np.zeros(3, dtype=np.float32), depth)
+        np.testing.assert_array_equal(robot.controller.walk_target, target)
+        np.testing.assert_array_equal(policy.velocity, baseline.velocity)
+
+        robot.camera.next_frame = robot.data.time
+        robot.step(remote)
+        self.assertIsNot(robot.camera.hits_world, hits)
+        self.assertIs(robot.depth_sample, sample)
+        robot.reset()
+        self.assertIsNone(robot.depth_sample)
+
+    def test_depth_points_use_attention_colors_and_valid_range(self):
+        model = mujoco.MjModel.from_xml_string("<mujoco/>")
+        scene = mujoco.MjvScene(model, maxgeom=4)
+        depth = np.array([[0.5, 1.0], [0.0, 3.0]])
+        hits = np.array([[[0., 0., 0.], [1., 0., 0.]], [[0., 1., 0.], [1., 1., 0.]]])
+        draw_depth_points(scene, hits, depth, np.array([0.1, 0.9, 0.4, 0.3]), (2, 2), (0.3, 2.0))
+        self.assertEqual(scene.ngeom, 2)
+        np.testing.assert_array_equal(scene.geoms[0].rgba, [0., 0., 1., 1.])
+        np.testing.assert_array_equal(scene.geoms[1].rgba, [1., 0., 0., 1.])
+        np.testing.assert_allclose(scene.geoms[1].pos, [1., 0., 0.05])
+        self.assertGreater(scene.geoms[1].size[0], scene.geoms[0].size[0])
+        np.testing.assert_array_equal(hits[..., 2], 0)
+
     def test_stairs_join_the_landing_and_downhill_ramp(self):
         model = load_model(DEFAULT_XML, "stairs", 0.10)
         data = mujoco.MjData(model)
@@ -93,6 +138,51 @@ class DepthSimulationTests(unittest.TestCase):
                 button(11, 1)
                 robot.step(joystick.poll())
                 self.assertEqual(robot.controller.mode, WorkMode.STAND)
+
+    def test_fall_protection_disables_control_and_requires_a_fresh_press(self):
+        policy = DepthPolicy(POLICY_PATH)
+        robot = MujocoRobot(load_model(DEFAULT_XML, "flat", 0.1), policy, DEFAULT_BASE_HEIGHT)
+        remote = SimpleNamespace(button=np.zeros(14, dtype=bool), axes=np.zeros(2))
+
+        def set_tilt(degrees):
+            half_angle = math.radians(degrees) / 2
+            horizontal = math.sin(half_angle) / math.sqrt(2)
+            robot.data.qpos[3:7] = [math.cos(half_angle), horizontal, horizontal, 0.0]
+
+        robot.controller.set_mode(WorkMode.USERWALK, policy.stand_pos, robot.data.time)
+        robot.controller.walk_target = policy.stand_pos
+        robot.controller.policy_tick = 1
+        robot.supported = False
+
+        set_tilt(44.9)
+        robot.step(remote)
+        self.assertEqual(robot.controller.mode, WorkMode.USERWALK)
+        self.assertEqual(robot.controller.policy_tick, 2)
+
+        set_tilt(45.1)
+        robot.data.qvel[robot.qvel] = 0.5
+        robot.step(remote)
+        self.assertEqual(robot.controller.mode, WorkMode.DEFAULT)
+        self.assertEqual(robot.controller.policy_tick, 2)
+        np.testing.assert_allclose(robot.data.ctrl[robot.actuators], -0.05)
+
+        remote.button[9] = True
+        set_tilt(60)
+        robot.step(remote)
+        self.assertEqual(robot.controller.mode, WorkMode.DEFAULT)
+        set_tilt(0)
+        robot.step(remote)
+        self.assertEqual(robot.controller.mode, WorkMode.DEFAULT)
+        remote.button[9] = False
+        robot.step(remote)
+        remote.button[9] = True
+        robot.step(remote)
+        self.assertEqual(robot.controller.mode, WorkMode.LIE)
+
+        robot.status.imu_data.ori = np.zeros(4)
+        robot.controller.on_status(robot.status)
+        robot.controller.process()
+        self.assertEqual(robot.controller.mode, WorkMode.DEFAULT)
 
     def test_joystick_override_and_disconnect(self):
         with tempfile.TemporaryDirectory() as temp:
