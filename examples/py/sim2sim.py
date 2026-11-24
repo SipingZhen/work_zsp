@@ -73,7 +73,6 @@ class MujocoDepth(DepthSource):
         self.mount_rotation = self.mount_rotation.reshape(3, 3)
         self.period = config["update_period"]
         self.max_depth = config["max_distance"]
-        self.cutoff = self.max_depth / self.rays[:, 2].min()
         # A separate geometry group limits depth to world geometry, including the ground and stairs.
         model.geom_group[model.geom_bodyid == 0] = 5
         model.geom_group[model.geom_bodyid != 0] %= 5
@@ -95,9 +94,11 @@ class MujocoDepth(DepthSource):
         origin = data.xpos[base_id] + base_rotation @ self.offset
         camera_rotation = base_rotation @ self.mount_rotation
         directions = self.rays @ camera_rotation.T
+        # A finite geometry cutoff can cull the infinite ground plane by its origin.
+        # Apply the camera range to each hit's optical depth instead.
         mujoco.mj_multiRay(
             self.model, data, origin, directions.ravel(), self.terrain_group, True, -1,
-            self.geom_ids, self.distances, None, len(self.rays), self.cutoff,
+            self.geom_ids, self.distances, None, len(self.rays), np.inf,
         )
         depth = self.distances * self.rays[:, 2]
         valid = (depth > 0) & (depth <= self.max_depth)

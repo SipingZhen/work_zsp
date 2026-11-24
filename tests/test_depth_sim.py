@@ -215,6 +215,20 @@ class DepthSimulationTests(unittest.TestCase):
         robot.data.time = 0.23
         self.assertIsNone(camera.latest_frame())
 
+    def test_mujoco_depth_finds_ground_far_from_world_origin(self):
+        policy = DepthPolicy(POLICY_PATH)
+        model = load_model(DEFAULT_XML, "stairs", 0.1)
+        robot = MujocoRobot(model, policy, DEFAULT_BASE_HEIGHT)
+        robot.data.qpos[:2] = [9.0, 0.0]
+        mujoco.mj_forward(model, robot.data)
+
+        robot.camera.update()
+        depth = robot.camera.latest_frame()
+        near, far = policy.config["depth_range"]
+        valid = (depth >= near) & (depth <= far)
+        self.assertGreater(np.count_nonzero(valid), depth.size // 2)
+        np.testing.assert_allclose(robot.camera.hits_world[valid, 2], 0.0, atol=1e-6)
+
     def test_realsense_still_publishes_calibrated_metric_depth(self):
         raw = np.array([[100, 200], [0, 400]], dtype=np.uint16)
         frame = SimpleNamespace(get_data=lambda: raw, get_units=lambda: 0.002)
