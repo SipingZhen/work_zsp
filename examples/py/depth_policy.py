@@ -28,6 +28,8 @@ def projected_gravity(quat_xyzw):
 
 
 class DepthPolicy:
+    inference_frames = 1
+
     def __init__(self, path):
         options = ort.SessionOptions()
         options.intra_op_num_threads = 2

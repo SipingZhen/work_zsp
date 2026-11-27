@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import time
 
-from depth_policy import DepthPolicy
+from policy_process import add_inference_argument, open_depth_policy
 from realsense_depth import RealSenseDepth
 from user_controller import MOTOR_PERIOD, UserController
 
@@ -15,14 +15,15 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     parser = argparse.ArgumentParser(description="Run the N2 depth policy through the low-level SDK.")
     parser.add_argument("--camera-fps", type=int, default=90, help="RealSense depth stream frame rate")
+    add_inference_argument(parser)
     args = parser.parse_args()
 
     sys.path.insert(0, str(ROOT / "build"))
     from lowcontrol_py import LowController, MotorCmd
 
     os.environ.setdefault("CYCLONEDDS_URI", (ROOT / "config/dds.xml").as_uri())
-    policy = DepthPolicy(ROOT / "policy/n2_depth.onnx")
-    with RealSenseDepth(policy.config["camera"], args.camera_fps) as camera:
+    policy_context = open_depth_policy(ROOT / "policy/n2_depth.onnx", args.inference_frames)
+    with policy_context as policy, RealSenseDepth(policy.config["camera"], args.camera_fps) as camera:
         ctrl = LowController.instance()
         print("Waiting for the N2 DDS peer", flush=True)
         if not ctrl.init():

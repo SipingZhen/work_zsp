@@ -29,6 +29,7 @@ class UserController:
         self.status = None
         self.buttons = np.zeros(14, dtype=bool)
         self.mode = WorkMode.DEFAULT
+        self.policy_sampled = False
         self.commands = [motor_cmd() for _ in policy.stand_pos]
         for i, cmd in enumerate(self.commands):
             cmd.motor_id = i
@@ -51,6 +52,7 @@ class UserController:
         if mode == WorkMode.USERWALK:
             self.policy.reset()
             self.policy_tick = 0
+            self.walk_target = self.policy.stand_pos
         print(mode.name, flush=True)
 
     def send_targets(self, target, kp, kd):
@@ -73,6 +75,7 @@ class UserController:
                           self.pose_kp, self.pose_kd)
 
     def process(self):
+        self.policy_sampled = False
         snapshot = self.status
         if snapshot is None:
             return
@@ -151,14 +154,22 @@ class UserController:
             self.handle_pose_mode(now)
 
     def handle_walk_mode(self, status, motors, joint_pos, axes, depth):
+        inference_frames = self.policy.inference_frames
+        if inference_frames > 1 and (self.policy_tick == 0 or self.policy_tick >= inference_frames):
+            target = self.policy.poll()
+            if target is not None:
+                self.walk_target = target
+
         if self.policy_tick == 0:
             joint_vel = np.array([motor.vel for motor in motors], dtype=np.float32)
             imu = status.imu_data
             command = np.asarray([axes[1], 0.0, axes[0]], dtype=np.float32)
             command *= self.policy.command_ranges[:, 1]
-            self.walk_target = self.policy.step(
-                joint_pos, joint_vel, imu.ori, imu.angular_vel,
-                command, depth,
-            )
+            inputs = joint_pos, joint_vel, imu.ori, imu.angular_vel, command, depth
+            if inference_frames == 1:
+                self.walk_target = self.policy.step(*inputs)
+            else:
+                self.policy.submit(*inputs)
+            self.policy_sampled = True
         self.send_targets(self.walk_target, self.policy.kp, self.policy.kd)
         self.policy_tick = (self.policy_tick + 1) % self.decimation

@@ -10,7 +10,8 @@ import mujoco
 import numpy as np
 
 from depth_camera import DepthSource, optical_rays
-from depth_policy import DepthPolicy, SDK_JOINT_NAMES
+from depth_policy import SDK_JOINT_NAMES
+from policy_process import add_inference_argument, open_depth_policy
 from sim_remote import LinuxJoystick, button_binding
 from user_controller import MOTOR_PERIOD, STAND_DURATION, UserController, WorkMode
 
@@ -164,6 +165,7 @@ class MujocoRobot:
         self.supported = True
         self.camera.reset()
         self.depth_sample = None
+        self.policy_depth_sample = None
         self.controller = UserController(self, SimpleNamespace, self.policy, self.camera,
                                          clock=lambda: self.data.time)
         mujoco.mj_forward(self.model, self.data)
@@ -193,11 +195,15 @@ class MujocoRobot:
         self.on_status(self.status)
         previous_attention = self.policy.attention
         self.controller.process()
+        previous_sample = self.policy_depth_sample
+        if self.controller.policy_sampled:
+            self.policy_depth_sample = self.camera.hits_world, self.camera.latest_frame()
+        attention = self.policy.attention
         if self.controller.mode != WorkMode.USERWALK:
             self.depth_sample = None
-        elif self.policy.attention is not previous_attention:
-            # Match the latest depth frame in the inference input, even between camera updates.
-            self.depth_sample = self.camera.hits_world, self.camera.latest_frame(), self.policy.attention
+        elif attention is not None and attention is not previous_attention:
+            sample = self.policy_depth_sample if self.policy.inference_frames == 1 else previous_sample
+            self.depth_sample = (*sample, attention)
 
         mujoco.mj_step2(self.model, data)
         if self.controller.mode == WorkMode.USERWALK:
@@ -259,6 +265,7 @@ def main():
     parser.add_argument("--joystick-forward-sign", type=int, choices=(-1, 1), default=-1)
     parser.add_argument("--joystick-yaw-sign", type=int, choices=(-1, 1), default=-1)
     parser.add_argument("--joystick-debug", action="store_true")
+    add_inference_argument(parser)
     args = parser.parse_args()
     positive = (args.step_height, args.base_height) + (() if args.duration is None else (args.duration,))
     if any(not math.isfinite(x) or x <= 0 for x in positive):
@@ -278,9 +285,9 @@ def main():
             args.joystick_forward_sign, args.joystick_yaw_sign,
             args.joystick_button_map, args.joystick_debug,
         ) if args.joystick else nullcontext(None)
-        with source as joystick:
-            show_points = not args.headless and not args.no_vis_attention
-            policy = DepthPolicy(ATTENTION_POLICY_PATH if show_points else POLICY_PATH)
+        show_points = not args.headless and not args.no_vis_attention
+        policy_path = ATTENTION_POLICY_PATH if show_points else POLICY_PATH
+        with source as joystick, open_depth_policy(policy_path, args.inference_frames) as policy:
             model = load_model(args.xml, args.terrain, args.step_height)
             robot = MujocoRobot(model, policy, args.base_height)
             view = nullcontext(None) if args.headless else passive_viewer(model, robot.data, on_key)
@@ -319,7 +326,7 @@ def run(robot, joystick, view, reset, duration, command):
                 ticks += 1
                 if viewer is not None and ticks % 8 == 0:
                     viewer.sync()
-                if viewer is not None or joystick is not None:
+                if viewer is not None or joystick is not None or robot.policy.inference_frames > 1:
                     time.sleep(max(0.0, start + ticks * MOTOR_PERIOD - time.monotonic()))
         except KeyboardInterrupt:
             pass

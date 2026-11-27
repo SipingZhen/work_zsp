@@ -7,7 +7,7 @@ import threading
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import mujoco
 import numpy as np
@@ -24,6 +24,45 @@ from user_controller import MOTOR_PERIOD, STAND_DURATION, WorkMode
 
 
 class DepthSimulationTests(unittest.TestCase):
+    def test_async_policy_holds_targets_and_uses_sampled_depth(self):
+        for frames in range(2, 6):
+            with self.subTest(frames=frames):
+                policy = DepthPolicy(ATTENTION_POLICY_PATH)
+                policy.inference_frames = frames
+                policy.submit = Mock()
+                policy.poll = Mock(return_value=None)
+                model = load_model(DEFAULT_XML, "flat", 0.1)
+                robot = MujocoRobot(model, policy, DEFAULT_BASE_HEIGHT)
+                robot.set_joint = Mock(wraps=robot.set_joint)
+                remote = SimpleNamespace(button=np.zeros(14, dtype=bool), axes=np.zeros(2))
+                robot.controller.set_mode(WorkMode.USERWALK, policy.stand_pos, robot.data.time)
+                target = policy.stand_pos + 0.01
+                attention = np.ones((1, 1, 96))
+
+                def complete():
+                    policy.attention = attention
+                    return target
+
+                robot.step(remote)
+                hits, depth = robot.camera.hits_world, robot.camera.latest_frame()
+                self.assertIs(policy.submit.call_args.args[-1], depth)
+                np.testing.assert_array_equal(robot.controller.walk_target, policy.stand_pos)
+
+                policy.poll.side_effect = complete
+                robot.camera.next_frame = robot.data.time
+                for _ in range(1, frames):
+                    robot.step(remote)
+                    np.testing.assert_array_equal(robot.controller.walk_target, policy.stand_pos)
+                self.assertEqual(policy.poll.call_count, 1)
+                self.assertIsNot(robot.camera.hits_world, hits)
+
+                robot.step(remote)
+                self.assertEqual(policy.submit.call_count, 1)
+                self.assertEqual(robot.set_joint.call_count, frames + 1)
+                np.testing.assert_array_equal(robot.controller.walk_target, target)
+                for actual, captured in zip(robot.depth_sample, (hits, depth, attention)):
+                    self.assertIs(actual, captured)
+
     def test_attention_points_use_the_inference_frame(self):
         policy = DepthPolicy(ATTENTION_POLICY_PATH)
         baseline = DepthPolicy(POLICY_PATH)
